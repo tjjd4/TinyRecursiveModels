@@ -52,6 +52,7 @@ class PretrainConfig(pydantic.BaseModel):
 
     # Hyperparams
     global_batch_size: int
+    micro_batch_size: Optional[int] = None  # For gradient accumulation, None means use global_batch_size
     epochs: int
 
     lr: float
@@ -288,6 +289,7 @@ def create_evaluators(config: PretrainConfig, eval_metadata: PuzzleDatasetMetada
 
     return evaluators
 
+# [Gradient Accumulation] add parameter `is_update_step` to indicate whether this is a true update step
 def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, global_batch_size: int, rank: int, world_size: int, is_update_step: bool = True):
     # [Gradient Accumulation] count step only when true update (after gradient accumulation)
     if is_update_step:
@@ -306,7 +308,8 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
     # Forward
     train_state.carry, loss, metrics, _, _ = train_state.model(carry=train_state.carry, batch=batch, return_keys=[])
 
-    ((1 / global_batch_size) * loss).backward()
+    # [Gradient Accumulation] divide loss by the real global batch size
+    ((1 / config.global_batch_size) * loss).backward()
 
     
     reduced_metrics = None
@@ -346,6 +349,7 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
                 
                 # Postprocess
                 count = max(reduced_metrics["count"], 1)  # Avoid NaNs
+                # [Gradient Accumulation] use `global_batch_size` here is `MICRO_BATCH_SIZE` if config.micro_batch_size is set
                 reduced_metrics = {f"train/{k}": v / (global_batch_size if k.endswith("loss") else count) for k, v in reduced_metrics.items()}
 
                 reduced_metrics["train/lr"] = lr_this_step
@@ -570,7 +574,7 @@ def launch(hydra_config: DictConfig):
 
     # [Gradient Accumulation] parameters for gradient accumulation
     TARGET_BATCH_SIZE = config.global_batch_size
-    MICRO_BATCH_SIZE = 8
+    MICRO_BATCH_SIZE = config.micro_batch_size if config.micro_batch_size is not None else TARGET_BATCH_SIZE
     ACCUMULATION_STEPS = max(1, TARGET_BATCH_SIZE // MICRO_BATCH_SIZE)
     
     if RANK == 0:
@@ -631,11 +635,14 @@ def launch(hydra_config: DictConfig):
         if RANK == 0:
             print("TRAIN")
         train_state.model.train()
+
+        # [Gradient Accumulation] loop over train_loader with micro batches; current value of `global_batch_size` is `MICRO_BATCH_SIZE`
         for set_name, batch, global_batch_size in train_loader:
 
             # [Gradient Accumulation] increment micro step counter and determine if this is an update step
             micro_step_counter += 1
             is_update_step = (micro_step_counter % ACCUMULATION_STEPS == 0)
+            # [Gradient Accumulation] pass boolean flag `is_update_step` to train_batch to indicate whether this is a true update step
             metrics = train_batch(config, train_state, batch, global_batch_size, rank=RANK, world_size=WORLD_SIZE, is_update_step=is_update_step)
 
             if RANK == 0 and metrics is not None:
