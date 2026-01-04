@@ -1,0 +1,30 @@
+name: recursive_reasoning.trm_rl@TinyRecursiveReasoningModel_RL
+loss:
+  name: losses.grpo_loss@GRPOLossHead
+  num_generations: 4
+  max_steps: 16
+  correct_reward: 1.0
+  len_penalty: 0.1
+  entropy_bonus: 0.005
+
+halt_exploration_prob: 0.1
+halt_max_steps: 16
+
+H_cycles: 3
+L_cycles: 6
+
+H_layers: 0
+L_layers: 2
+
+hidden_size: 512
+num_heads: 8  # min(2, hidden_size // 64)
+expansion: 4
+
+puzzle_emb_ndim: ${.hidden_size}
+
+pos_encodings: rope
+forward_dtype: bfloat16
+
+mlp_t: False # use mlp on L instead of transformer
+puzzle_emb_len: 16 # if non-zero, its specified to this value
+no_ACT_continue: True # No continue ACT loss, only use the sigmoid of the halt which makes much more sense

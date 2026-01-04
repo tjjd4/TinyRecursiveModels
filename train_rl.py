@@ -1,0 +1,513 @@
+from typing import Optional, Any, Sequence, List, Dict
+from dataclasses import dataclass
+import os
+import math
+import yaml
+import shutil
+import copy
+
+import torch
+import torch.distributed as dist
+from torch import nn
+from torch.utils.data import DataLoader
+
+import tqdm
+import wandb
+import coolname
+import hydra
+import pydantic
+from omegaconf import DictConfig
+from adam_atan2 import AdamATan2
+
+from puzzle_dataset import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
+from utils.functions import load_model_class, get_model_source_path
+from models.sparse_embedding import CastedSparseEmbeddingSignSGD_Distributed
+from models.ema import EMAHelper
+
+
+class LossConfig(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra='allow')
+    name: str
+    num_generations: int
+
+
+class ArchConfig(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra='allow')
+    name: str
+    loss: LossConfig
+
+
+class EvaluatorConfig(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="allow")
+    name: str
+
+
+class TrainRLConfig(pydantic.BaseModel):
+    # Config
+    arch: ArchConfig
+    # Data
+    data_paths: List[str]
+    data_paths_test: List[str] = []
+
+    # Hyperparams
+    global_batch_size: int
+    micro_batch_size: Optional[int] = None  # For gradient accumulation, None means use global_batch_size
+    epochs: int
+
+    lr: float
+    lr_min_ratio: float
+    lr_warmup_steps: int
+
+    weight_decay: float
+    beta1: float
+    beta2: float
+
+    # Puzzle embedding
+    puzzle_emb_lr: float
+    puzzle_emb_weight_decay: float
+
+    # Names
+    project_name: Optional[str] = None
+    run_name: Optional[str] = None
+
+    # Load checkpoint from pretrain
+    load_checkpoint: Optional[str] = None
+    checkpoint_path: Optional[str] = None
+
+    # Extras
+    seed: int = 0
+    checkpoint_every_eval: bool = False
+    eval_interval: Optional[int] = None
+    min_eval_interval: Optional[int] = 0 # when to start eval
+    save_interval: Optional[int] = None
+
+    ema: bool = False # use Exponential-Moving-Average
+    ema_rate: float = 0.999 # EMA-rate
+    freeze_weights: bool = False # If True, freeze weights and only learn the embeddings
+
+# [RL] rollout no carry between states
+@dataclass
+class TrainState:
+    model: nn.Module
+    optimizers: Sequence[torch.optim.Optimizer]
+    optimizer_lrs: Sequence[float]
+
+    step: int
+    total_steps: int
+
+
+def create_dataloader(config: TrainRLConfig, split: str, rank: int, world_size: int, **kwargs):
+    dataset = PuzzleDataset(PuzzleDatasetConfig(
+        seed=config.seed,
+        dataset_paths=config.data_paths_test if len(config.data_paths_test)>0 and split=="test" else config.data_paths,
+        rank=rank,
+        num_replicas=world_size,
+        **kwargs
+    ), split=split)
+    dataloader = DataLoader(
+        dataset,
+        batch_size=None,
+        num_workers=1,
+        prefetch_factor=8,
+        pin_memory=True,
+        persistent_workers=True
+    )
+    return dataloader, dataset.metadata
+
+
+def create_model(config: TrainRLConfig, train_metadata: PuzzleDatasetMetadata, rank: int, world_size: int):
+    model_cfg = dict(
+        **config.arch.__pydantic_extra__,  # type: ignore
+        # [Gradient Accumulation] use override_batch_size if provided, else use global_batch_size
+        batch_size=(config.micro_batch_size if config.micro_batch_size is not None else config.global_batch_size) * config.arch.loss.num_generations // world_size,
+        vocab_size=train_metadata.vocab_size,
+        seq_len=train_metadata.seq_len,
+        num_puzzle_identifiers=train_metadata.num_puzzle_identifiers,
+        causal=False  # Non-autoregressive
+    )
+
+    # Instantiate model with loss head
+    model_cls = load_model_class(config.arch.name)
+    loss_head_cls = load_model_class(config.arch.loss.name)
+
+    with torch.device("cuda"):
+        model: nn.Module = model_cls(model_cfg)
+
+        # Load checkpoint
+        if rank == 0:
+            load_checkpoint(model, config)
+
+        # Pass RL config parameters to loss head (same pattern as pretrain.py)
+        model = loss_head_cls(model, config.arch.loss.num_generations, **config.arch.loss.__pydantic_extra__)  # type: ignore
+
+        print(model)
+        if "DISABLE_COMPILE" not in os.environ:
+            model = torch.compile(model)  # type: ignore
+
+        # Broadcast parameters from rank 0
+        if world_size > 1:
+            with torch.no_grad():
+                for param in list(model.parameters()) + list(model.buffers()):
+                    dist.broadcast(param, src=0)
+
+    # freeze all params
+    for param in model.parameters():
+        param.requires_grad = False
+
+    try:
+        # unfreeze q_head
+        q_head_params = model.model.inner.q_head.parameters()
+        for param in q_head_params:
+            param.requires_grad = True
+        print(" -> Q-Head unfrozen successfully.")
+    except AttributeError as e:
+        print(f"Error unfreezing Q-Head: {e}")
+        print("Please check model structure strings.")
+        exit(1)
+
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    if rank == 0:
+        print(f"Trainable parameters: {sum(p.numel() for p in trainable_params)}")
+
+    # Optimizers and lr
+    optimizers = [
+        AdamATan2(
+            trainable_params,  # only trainable parameters reduce memory usage
+            lr=0,  # needs to be set by scheduler
+            weight_decay=config.weight_decay,
+            betas=(config.beta1, config.beta2)
+        )
+    ]
+    optimizer_lrs = [
+        config.lr
+    ]
+
+    return model, optimizers, optimizer_lrs
+
+
+def cosine_schedule_with_warmup_lr_lambda(
+    current_step: int, *, base_lr: float, num_warmup_steps: int, num_training_steps: int, min_ratio: float = 0.0, num_cycles: float = 0.5
+):
+    if current_step < num_warmup_steps:
+        return base_lr * float(current_step) / float(max(1, num_warmup_steps))
+
+    progress = float(current_step - num_warmup_steps) / float(max(1, num_training_steps - num_warmup_steps))
+    return base_lr * (min_ratio + max(0.0, (1 - min_ratio) * 0.5 * (1.0 + math.cos(math.pi * float(num_cycles) * 2.0 * progress))))
+
+
+def init_train_state(config: TrainRLConfig, train_metadata: PuzzleDatasetMetadata, rank: int, world_size: int):
+    # Estimated total training steps
+    total_steps = int(config.epochs * train_metadata.total_groups * train_metadata.mean_puzzle_examples / config.global_batch_size)
+
+    # Model
+    model, optimizers, optimizer_lrs = create_model(config, train_metadata, rank=rank, world_size=world_size)
+
+    return TrainState(
+        step=0,
+        total_steps=total_steps,
+
+        model=model,
+        optimizers=optimizers,
+        optimizer_lrs=optimizer_lrs,
+    )
+
+
+def save_train_state(config: TrainRLConfig, train_state: TrainState):
+    if config.checkpoint_path is None:
+        return
+
+    os.makedirs(config.checkpoint_path, exist_ok=True)
+    torch.save(train_state.model.state_dict(), os.path.join(config.checkpoint_path, f"step_{train_state.step}"))
+
+
+def load_checkpoint(model: nn.Module, config: TrainRLConfig):
+    if config.load_checkpoint is not None:
+        print(f"Loading checkpoint {config.load_checkpoint}")
+
+        # Load state dict
+        state_dict = torch.load(config.load_checkpoint, map_location="cuda")
+
+        # Resize and reset puzzle emb if needed
+        puzzle_emb_name = "_orig_mod.model.inner.puzzle_emb.weights"
+        expected_shape: torch.Size = model.model.puzzle_emb.weights.shape  # type: ignore
+        if puzzle_emb_name in state_dict:
+            puzzle_emb = state_dict[puzzle_emb_name]
+            if puzzle_emb.shape != expected_shape:
+                print(f"Resetting puzzle embedding as shape is different. Found {puzzle_emb.shape}, Expected {expected_shape}")
+                # Re-initialize using mean
+                state_dict[puzzle_emb_name] = (
+                    torch.mean(puzzle_emb, dim=0, keepdim=True).expand(expected_shape).contiguous()
+                )
+        missing, unexpected = model.load_state_dict(state_dict, strict=False, assign=True)
+
+        if len(missing):
+            print(f"[train_rl.py] Missing keys (ok if head changed): {len(missing)}")
+            # print first few
+            for k in missing[:20]:
+                print("  missing:", k)
+        if len(unexpected):
+            print(f"[train_rl.py] Unexpected keys (ok if old head existed): {len(unexpected)}")
+            for k in unexpected[:20]:
+                print("  unexpected:", k)
+
+
+def compute_lr(base_lr: float, config: TrainRLConfig, train_state: TrainState):
+    return cosine_schedule_with_warmup_lr_lambda(
+        current_step=train_state.step,
+        base_lr=base_lr,
+        num_warmup_steps=round(config.lr_warmup_steps),
+        num_training_steps=train_state.total_steps,
+        min_ratio=config.lr_min_ratio
+    )
+
+# [Gradient Accumulation] add parameter `is_update_step` to indicate whether this is a true update step
+def train_batch(config: TrainRLConfig, train_state: TrainState, batch: Any, global_batch_size: int, rank: int, world_size: int, is_update_step: bool = True):
+    # [Gradient Accumulation] count step only when true update (after gradient accumulation)
+    if is_update_step:
+        train_state.step += 1
+    if train_state.step > train_state.total_steps:  # At most train_total_steps
+        return
+
+    # To device
+    batch = {k: v.cuda() for k, v in batch.items()}
+
+    carry, loss, metrics, _, all_finish = train_state.model(batch=batch, return_keys=[])  # type: ignore
+
+    ((1.0 / config.global_batch_size) * loss).backward()
+
+    reduced_metrics = None
+
+    # [Gradient Accumulation] only update on true update step
+    if is_update_step:
+        # DDP allreduce grads
+        if world_size > 1:
+            for p in train_state.model.parameters():
+                if p.grad is not None:
+                    dist.all_reduce(p.grad)
+
+        # Apply optimizer
+        lr_this_step = None
+        for optim, base_lr in zip(train_state.optimizers, train_state.optimizer_lrs):
+            lr_this_step = compute_lr(base_lr, config, train_state)
+
+            for param_group in optim.param_groups:
+                param_group["lr"] = lr_this_step
+
+            optim.step()
+            optim.zero_grad()
+
+        # Reduce metrics to rank0
+        if metrics:
+            metric_keys = list(sorted(metrics.keys()))
+            metric_values = torch.stack([metrics[k].detach() for k in metric_keys]).to("cuda")
+            if world_size > 1:
+                dist.reduce(metric_values, dst=0)
+
+            if rank == 0:
+                mv = metric_values.cpu().numpy()
+                reduced_metrics = {k: mv[i] for i, k in enumerate(metric_keys)}
+
+                # Normalize like pretrain:
+                # loss-like metrics divide by global_batch_size, others divide by count if exists
+                count = max(float(reduced_metrics.get("count", 1.0)), 1.0)
+                post = {}
+                for k, v in reduced_metrics.items():
+                    if k.endswith("loss"):
+                        post[f"train/{k}"] = float(v) / float(global_batch_size)
+                    elif k == "count":
+                        post[f"train/{k}"] = float(v)
+                    else:
+                        post[f"train/{k}"] = float(v) / count
+
+                post["train/lr"] = float(lr_this_step if lr_this_step is not None else 0.0)
+                reduced_metrics = post
+
+    return reduced_metrics
+
+
+def save_code_and_config(config: TrainRLConfig):
+    if config.checkpoint_path is None or wandb.run is None:
+        return
+
+    os.makedirs(config.checkpoint_path, exist_ok=True)
+
+    # Copy code
+    code_list = [
+        get_model_source_path(config.arch.name),
+        get_model_source_path(config.arch.loss.name)
+    ]
+    for code_file in code_list:
+        if code_file is not None:
+            code_name = os.path.basename(code_file)
+
+            shutil.copy(code_file, os.path.join(config.checkpoint_path, code_name))
+
+    # Dump config as yaml
+    config_file = os.path.join(config.checkpoint_path, "all_config.yaml")
+    with open(config_file, "wt") as f:
+        yaml.dump(config.model_dump(), f)
+
+    # Log code
+    wandb.run.log_code(config.checkpoint_path)
+
+
+def load_synced_config(hydra_config: DictConfig, rank: int, world_size: int) -> TrainRLConfig:
+    objects = [None]
+    if rank == 0:
+        config = TrainRLConfig(**hydra_config)  # type: ignore
+
+        # Naming
+        if config.project_name is None:
+            config.project_name = f"{os.path.basename(config.data_paths[0]).capitalize()}-GRPO-torch"
+        if config.run_name is None:
+            config.run_name = f"{config.arch.name.split('@')[-1]} {coolname.generate_slug(2)}"
+        if config.checkpoint_path is None:
+            config.checkpoint_path = os.path.join("checkpoints", config.project_name, config.run_name)
+
+        objects = [config]
+
+    if world_size > 1:
+        dist.broadcast_object_list(objects, src=0)
+
+    return objects[0]  # type: ignore
+
+
+@hydra.main(config_path="config", config_name="cfg_train_rl", version_base=None)
+def launch(hydra_config: DictConfig):
+    RANK = 0
+    WORLD_SIZE = 1
+    CPU_PROCESS_GROUP = None
+
+    # Initialize distributed training if in distributed environment (e.g. torchrun)
+    if "LOCAL_RANK" in os.environ:
+        # Initialize distributed, default device and dtype
+        dist.init_process_group(backend="nccl")
+
+        RANK = dist.get_rank()
+        WORLD_SIZE = dist.get_world_size()
+
+        torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+
+        # CPU GLOO process group
+        CPU_PROCESS_GROUP = dist.new_group(backend="gloo")
+        assert (
+            dist.get_rank(CPU_PROCESS_GROUP) == RANK and dist.get_world_size(CPU_PROCESS_GROUP) == WORLD_SIZE
+        )
+
+    # Load sync'ed config
+    config = load_synced_config(hydra_config, rank=RANK, world_size=WORLD_SIZE)
+
+    # [Gradient Accumulation] parameters for gradient accumulation
+    BATCH_SIZE = config.micro_batch_size if config.micro_batch_size is not None else config.global_batch_size
+    ACCUMULATION_STEPS = max(1, config.global_batch_size // BATCH_SIZE)
+
+    if RANK == 0 and config.micro_batch_size is not None:
+        print(f"Gradient Accumulation Enabled:")
+        print(f"  Target Global Batch Size: {config.global_batch_size}")
+        print(f"  Actual Batch Size       : {BATCH_SIZE}")
+        print(f"  Accumulation Steps      : {ACCUMULATION_STEPS}")
+
+    # Seed RNGs to ensure consistency
+    torch.random.manual_seed(config.seed + RANK)
+
+    # Dataset
+    train_epochs_per_iter = config.epochs  # simplest: no periodic eval loop yet
+    total_iters = 1
+
+    train_loader, train_metadata = create_dataloader(
+        config,
+        "train",
+        test_set_mode=False,
+        epochs_per_iter=train_epochs_per_iter,
+        global_batch_size=BATCH_SIZE,
+        rank=RANK,
+        world_size=WORLD_SIZE,
+    )
+
+    # Train state
+    train_state = init_train_state(config, train_metadata, rank=RANK, world_size=WORLD_SIZE)
+
+    # Logger
+    progress_bar = None
+    ema_helper = None
+    if RANK == 0:
+        progress_bar = tqdm.tqdm(total=train_state.total_steps)
+        wandb.init(
+            project=config.project_name,
+            name=config.run_name,
+            config=config.model_dump(),
+            settings=wandb.Settings(_disable_stats=True),  # type: ignore
+        )
+        wandb.log({"num_params": sum(x.numel() for x in train_state.model.parameters())}, step=0)
+        save_code_and_config(config)
+
+    if config.ema:
+        if RANK == 0:
+            print("Setup EMA")
+        ema_helper = EMAHelper(mu=config.ema_rate)
+        ema_helper.register(train_state.model)
+
+    # Training loop
+    micro_step_counter = 0
+
+    for _iter_id in range(total_iters):
+        if RANK == 0:
+            print(f"[Rank {RANK}, World Size {WORLD_SIZE}]: RL Epoch 0..{config.epochs-1}")
+            print("TRAIN_RL")
+
+        train_state.model.train()
+
+        for set_name, batch, global_batch_size in train_loader:
+            micro_step_counter += 1
+            is_update_step = (micro_step_counter % ACCUMULATION_STEPS == 0)
+
+            metrics = train_batch(
+                config=config,
+                train_state=train_state,
+                batch=batch,
+                global_batch_size=global_batch_size,
+                rank=RANK,
+                world_size=WORLD_SIZE,
+                is_update_step=is_update_step,
+            )
+
+            if RANK == 0 and metrics is not None:
+                wandb.log(metrics, step=train_state.step)
+                progress_bar.update(train_state.step - progress_bar.n)  # type: ignore
+
+                if config.save_interval is not None and (train_state.step % config.save_interval == 0):
+                    print(f"SAVE CHECKPOINT @ step {train_state.step}")
+                    # save EMA copy if enabled
+                    if config.ema and ema_helper is not None:
+                        tmp = copy.deepcopy(train_state)
+                        tmp.model = ema_helper.ema_copy(tmp.model)
+                        save_train_state(config, tmp, tag="ema")
+                        del tmp
+                    else:
+                        save_train_state(config, train_state)
+
+            if is_update_step and config.ema and ema_helper is not None:
+                ema_helper.update(train_state.model)
+
+            if train_state.step >= train_state.total_steps:
+                break
+
+        # end epoch
+
+    # Save final
+    if RANK == 0:
+        print("SAVE FINAL CHECKPOINT")
+        if config.ema and ema_helper is not None:
+            tmp = copy.deepcopy(train_state)
+            tmp.model = ema_helper.ema_copy(tmp.model)
+            save_train_state(config, tmp, tag="final_ema")
+            del tmp
+        save_train_state(config, train_state, tag="final")
+
+    if dist.is_initialized():
+        dist.destroy_process_group()
+    wandb.finish()
+
+
+if __name__ == "__main__":
+    launch()
