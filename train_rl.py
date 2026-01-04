@@ -132,17 +132,15 @@ def create_model(config: TrainRLConfig, train_metadata: PuzzleDatasetMetadata, r
 
     with torch.device("cuda"):
         model: nn.Module = model_cls(model_cfg)
+        print(model)
+        # Pass RL config parameters to loss head
+        model = loss_head_cls(model, config.arch.loss.num_generations, **config.arch.loss.__pydantic_extra__)  # type: ignore
+        if "DISABLE_COMPILE" not in os.environ:
+            model = torch.compile(model)  # type: ignore
 
         # Load checkpoint
         if rank == 0:
             load_checkpoint(model, config)
-
-        # Pass RL config parameters to loss head
-        model = loss_head_cls(model, config.arch.loss.num_generations, **config.arch.loss.__pydantic_extra__)  # type: ignore
-
-        print(model)
-        if "DISABLE_COMPILE" not in os.environ:
-            model = torch.compile(model)  # type: ignore
 
         # Broadcast parameters from rank 0
         if world_size > 1:
@@ -221,13 +219,14 @@ def save_train_state(config: TrainRLConfig, train_state: TrainState):
 
 
 def load_checkpoint(model: nn.Module, config: TrainRLConfig):
-    if config.load_checkpoint is not None:
+    if config.load_checkpoint is not None and config.load_checkpoint != "":
         print(f"Loading checkpoint {config.load_checkpoint}")
 
         # Load state dict
         state_dict = torch.load(config.load_checkpoint, map_location="cuda")
 
         # Resize and reset puzzle emb if needed
+        print(model)
         puzzle_emb_name = "_orig_mod.model.inner.puzzle_emb.weights"
         expected_shape: torch.Size = model.model.puzzle_emb.weights.shape  # type: ignore
         if puzzle_emb_name in state_dict:
