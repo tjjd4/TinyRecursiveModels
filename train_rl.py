@@ -118,7 +118,7 @@ def create_dataloader(config: TrainRLConfig, split: str, rank: int, world_size: 
 def create_model(config: TrainRLConfig, train_metadata: PuzzleDatasetMetadata, rank: int, world_size: int):
     model_cfg = dict(
         **config.arch.__pydantic_extra__,  # type: ignore
-        # [Gradient Accumulation] use override_batch_size if provided, else use global_batch_size
+        # [Gradient Accumulation] use micro_batch_size if provided, else use global_batch_size
         batch_size=(config.micro_batch_size if config.micro_batch_size is not None else config.global_batch_size) * config.arch.loss.num_generations // world_size,
         vocab_size=train_metadata.vocab_size,
         seq_len=train_metadata.seq_len,
@@ -137,7 +137,7 @@ def create_model(config: TrainRLConfig, train_metadata: PuzzleDatasetMetadata, r
         if rank == 0:
             load_checkpoint(model, config)
 
-        # Pass RL config parameters to loss head (same pattern as pretrain.py)
+        # Pass RL config parameters to loss head
         model = loss_head_cls(model, config.arch.loss.num_generations, **config.arch.loss.__pydantic_extra__)  # type: ignore
 
         print(model)
@@ -432,35 +432,32 @@ def launch(hydra_config: DictConfig):
     ema_helper = None
     if RANK == 0:
         progress_bar = tqdm.tqdm(total=train_state.total_steps)
-        wandb.init(
-            project=config.project_name,
-            name=config.run_name,
-            config=config.model_dump(),
-            settings=wandb.Settings(_disable_stats=True),  # type: ignore
-        )
+        wandb.init(project=config.project_name, name=config.run_name, config=config.model_dump(), settings=wandb.Settings(_disable_stats=True))  # type: ignore
         wandb.log({"num_params": sum(x.numel() for x in train_state.model.parameters())}, step=0)
         save_code_and_config(config)
 
     if config.ema:
-        if RANK == 0:
-            print("Setup EMA")
+        print("Setup EMA")
         ema_helper = EMAHelper(mu=config.ema_rate)
         ema_helper.register(train_state.model)
 
     # Training loop
+    # [Gradient Accumulation] micro step counter for gradient accumulation
     micro_step_counter = 0
 
     for _iter_id in range(total_iters):
-        if RANK == 0:
-            print(f"[Rank {RANK}, World Size {WORLD_SIZE}]: RL Epoch 0..{config.epochs-1}")
-            print("TRAIN_RL")
+        print (f"[Rank {RANK}, World Size {WORLD_SIZE}]: Epoch {_iter_id * train_epochs_per_iter}")
 
+        if RANK == 0:
+            print("TRAIN_RL")
         train_state.model.train()
 
+        # [Gradient Accumulation] loop over train_loader with micro batches; current value of `global_batch_size` is `micro_batch_size`
         for set_name, batch, global_batch_size in train_loader:
             micro_step_counter += 1
             is_update_step = (micro_step_counter % ACCUMULATION_STEPS == 0)
 
+            # [Gradient Accumulation] pass boolean flag `is_update_step` to train_batch to indicate whether this is a true update step
             metrics = train_batch(
                 config=config,
                 train_state=train_state,
