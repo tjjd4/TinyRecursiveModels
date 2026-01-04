@@ -93,6 +93,8 @@ class GRPOLossHead(nn.Module):
             grid_action = torch.argmax(logits, dim=-1)  # (N, L)
 
             halt_logits = torch.stack([q_continue_logits, q_halt_logits], dim=-1)  # (N, 2)
+            halt_logits = torch.nan_to_num(halt_logits, nan=0.0)
+
             halt_dist = torch.distributions.Categorical(logits=halt_logits)
             halt_action = halt_dist.sample()  # (N,) 0=Cont, 1=Halt
             
