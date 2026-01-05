@@ -113,12 +113,12 @@ def create_dataloader(config: PretrainConfig, split: str, rank: int, world_size:
     )
     return dataloader, dataset.metadata
 
-# [Gradient Accumulation] add parameter `override_batch_size` for setup small batch size for gradient accumulation
-def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, rank: int, world_size: int, override_batch_size: Optional[int] = None):
+
+def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, rank: int, world_size: int):
     model_cfg = dict(
         **config.arch.__pydantic_extra__,  # type: ignore
-        # [Gradient Accumulation] use override_batch_size if provided, else use global_batch_size
-        batch_size=(override_batch_size if override_batch_size is not None else config.global_batch_size) // world_size,
+        # [Gradient Accumulation] use micro_batch_size if provided, else use global_batch_size
+        batch_size=(config.micro_batch_size if config.micro_batch_size is not None else config.global_batch_size) // world_size,
         vocab_size=train_metadata.vocab_size,
         seq_len=train_metadata.seq_len,
         num_puzzle_identifiers=train_metadata.num_puzzle_identifiers,
@@ -215,14 +215,13 @@ def cosine_schedule_with_warmup_lr_lambda(
     progress = float(current_step - num_warmup_steps) / float(max(1, num_training_steps - num_warmup_steps))
     return base_lr * (min_ratio + max(0.0, (1 - min_ratio) * 0.5 * (1.0 + math.cos(math.pi * float(num_cycles) * 2.0 * progress))))
 
-# [Gradient Accumulation] add parameter `override_batch_size` for setup small batch size for gradient accumulation
-def init_train_state(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, rank: int, world_size: int, micro_batch_size: Optional[int] = None):
+
+def init_train_state(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, rank: int, world_size: int):
     # Estimated total training steps
     total_steps = int(config.epochs * train_metadata.total_groups * train_metadata.mean_puzzle_examples / config.global_batch_size)
 
     # Model
-    # [Gradient Accumulation] pass MICRO_BATCH_SIZE as override_batch_size
-    model, optimizers, optimizer_lrs = create_model(config, train_metadata, rank=rank, world_size=world_size, override_batch_size=micro_batch_size)
+    model, optimizers, optimizer_lrs = create_model(config, train_metadata, rank=rank, world_size=world_size)
 
     return TrainState(
         step=0,
@@ -573,14 +572,13 @@ def launch(hydra_config: DictConfig):
     config = load_synced_config(hydra_config, rank=RANK, world_size=WORLD_SIZE)
 
     # [Gradient Accumulation] parameters for gradient accumulation
-    TARGET_BATCH_SIZE = config.global_batch_size
-    MICRO_BATCH_SIZE = config.micro_batch_size if config.micro_batch_size is not None else TARGET_BATCH_SIZE
-    ACCUMULATION_STEPS = max(1, TARGET_BATCH_SIZE // MICRO_BATCH_SIZE)
+    BATCH_SIZE = config.micro_batch_size if config.micro_batch_size is not None else config.global_batch_size
+    ACCUMULATION_STEPS = max(1, config.global_batch_size // BATCH_SIZE)
     
     if RANK == 0:
         print(f"Gradient Accumulation Enabled:")
-        print(f"  Target Global Batch Size: {TARGET_BATCH_SIZE}")
-        print(f"  Actual Micro Batch Size : {MICRO_BATCH_SIZE}")
+        print(f"  Target Global Batch Size: {config.global_batch_size}")
+        print(f"  Actual Batch Size : {BATCH_SIZE}")
         print(f"  Accumulation Steps      : {ACCUMULATION_STEPS}")
 
     # Seed RNGs to ensure consistency
@@ -592,11 +590,9 @@ def launch(hydra_config: DictConfig):
 
     assert config.epochs % train_epochs_per_iter == 0, "Eval interval must be a divisor of total epochs."
 
-    # [Gradient Accumulation] use MICRO_BATCH_SIZE for a single batch
-    train_loader, train_metadata = create_dataloader(config, "train", test_set_mode=False, epochs_per_iter=train_epochs_per_iter, global_batch_size=MICRO_BATCH_SIZE, rank=RANK, world_size=WORLD_SIZE)
+    train_loader, train_metadata = create_dataloader(config, "train", test_set_mode=False, epochs_per_iter=train_epochs_per_iter, global_batch_size=BATCH_SIZE, rank=RANK, world_size=WORLD_SIZE)
     try:
-        # [Gradient Accumulation] use MICRO_BATCH_SIZE for a single batch
-        eval_loader,  eval_metadata  = create_dataloader(config, "test", test_set_mode=True, epochs_per_iter=1, global_batch_size=MICRO_BATCH_SIZE, rank=RANK, world_size=WORLD_SIZE)
+        eval_loader,  eval_metadata  = create_dataloader(config, "test", test_set_mode=True, epochs_per_iter=1, global_batch_size=BATCH_SIZE, rank=RANK, world_size=WORLD_SIZE)
     except:
         print("NO EVAL DATA FOUND")
         eval_loader = eval_metadata = None
@@ -608,8 +604,7 @@ def launch(hydra_config: DictConfig):
         evaluators = []
 
     # Train state
-    # [Gradient Accumulation] pass parameter for gradient accumulation
-    train_state = init_train_state(config, train_metadata, rank=RANK, world_size=WORLD_SIZE, micro_batch_size=MICRO_BATCH_SIZE)
+    train_state = init_train_state(config, train_metadata, rank=RANK, world_size=WORLD_SIZE)
 
     # Progress bar and logger
     progress_bar = None
