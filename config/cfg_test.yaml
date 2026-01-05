@@ -1,0 +1,23 @@
+# Test config for model evaluation
+
+defaults:
+  - arch: trm
+  - _self_
+
+hydra:
+  output_subdir: null
+
+# Model checkpoint path
+load_checkpoint: ""
+
+# Data path
+data_paths: ['data/arc-aug-1000']
+data_paths_test: []
+
+# Test parameters
+num_samples: 10  # Number of random samples to test
+show_intermediate_steps: False  # Whether to show each reasoning step
+
+# Inference parameters
+batch_size: 1  # Batch size for inference (typically 1 for detailed output)
+seed: 0
