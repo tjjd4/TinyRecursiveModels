@@ -20,8 +20,8 @@ evaluators:
 global_batch_size: 64
 micro_batch_size: 8
 
-epochs: 10000
-eval_interval: 1000
+epochs: 1000
+eval_interval: 100
 checkpoint_every_eval: True
 
 lr: 1e-4
