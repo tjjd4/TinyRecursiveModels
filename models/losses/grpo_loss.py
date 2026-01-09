@@ -16,7 +16,6 @@ class GRPOLossHead(nn.Module):
         self,
         model: nn.Module,
         num_generations: int,
-        max_steps: int,
         len_penalty: float,
         correct_reward: float,
         entropy_bonus: float,
@@ -25,8 +24,6 @@ class GRPOLossHead(nn.Module):
         self.model = model
 
         self.num_generations = int(num_generations)
-        self.max_steps = int(max_steps)
-
         self.len_penalty = float(len_penalty)
         self.correct_reward = float(correct_reward)
         self.entropy_bonus = float(entropy_bonus)
@@ -34,8 +31,9 @@ class GRPOLossHead(nn.Module):
     def initial_carry(self, *args, **kwargs):
         return self.model.initial_carry(*args, **kwargs)  # type: ignore
 
+    # expand batch before forwarding
     @staticmethod
-    def _expand_batch(batch: Dict[str, torch.Tensor], num_generations: int) -> Dict[str, torch.Tensor]:
+    def expand_batch(batch: Dict[str, torch.Tensor], num_generations: int) -> Dict[str, torch.Tensor]:
         # (B, ...) -> (B*G, ...)
         return {k: v.repeat_interleave(num_generations, dim=0) for k, v in batch.items()}
 
@@ -56,120 +54,109 @@ class GRPOLossHead(nn.Module):
         self,
         return_keys: Sequence[str],
         *,
+        carry: Any,
         batch: Dict[str, torch.Tensor],
         **model_kwargs,
     ) -> Tuple[Any, torch.Tensor, Dict[str, torch.Tensor], Optional[Dict[str, torch.Tensor]], torch.Tensor]:
         device = batch["inputs"].device
-        B = batch["inputs"].shape[0]
+        N = batch["inputs"].shape[0]  # expanded batch size
         G = self.num_generations
-        N = B * G
 
-        # expand batch for group sampling
-        expanded_batch = self._expand_batch(batch, G)
+        if N % G != 0:
+            raise ValueError(f"Batch size ({N}) must be divisible by num_generations ({G})")
 
-        with torch.device("cuda"):
-            carry = self.model.initial_carry(expanded_batch)
+        B = N // G  # true batch size (before expansion)
 
-        # rollout state
-        active = torch.ones(N, dtype=torch.bool, device=device)
+        new_carry, outputs = self.model(carry=carry, batch=batch, **model_kwargs)
+        labels = new_carry.current_data["labels"]
 
-        final_actions = torch.zeros_like(expanded_batch["inputs"], dtype=torch.long)
-        final_steps = torch.zeros(N, dtype=torch.float32, device=device)
+        halt_logits = torch.stack([outputs["q_continue_logits"], outputs["q_halt_logits"]], dim=-1)  # (N, 2)
+        halt_logits = torch.nan_to_num(halt_logits, nan=0.0)
 
-        total_logprob = torch.zeros(N, dtype=torch.float32, device=device)
-        total_entropy = torch.zeros(N, dtype=torch.float32, device=device)
+        halt_dist = torch.distributions.Categorical(logits=halt_logits)
+        halt_action = halt_dist.sample()  # (N,) 0=Cont, 1=Halt
 
-        # rollout loop
-        for step in range(self.max_steps):
-            if not active.any():
-                break
-                
-            carry, outputs = self.model(carry=carry, batch=expanded_batch, **model_kwargs)
-
-            logits = outputs["logits"]  # (N, L, V)
-            q_halt_logits = outputs["q_halt_logits"]  # (N,)
-            q_continue_logits = outputs["q_continue_logits"]  # (N,)
-
-            grid_action = torch.argmax(logits, dim=-1)  # (N, L)
-
-            halt_logits = torch.stack([q_continue_logits, q_halt_logits], dim=-1)  # (N, 2)
-            halt_logits = torch.nan_to_num(halt_logits, nan=0.0)
-
-            halt_dist = torch.distributions.Categorical(logits=halt_logits)
-            halt_action = halt_dist.sample()  # (N,) 0=Cont, 1=Halt
-            
-            halt_step_logprob = halt_dist.log_prob(halt_action)  # (N,)
-
-            # entropy (optional)
-            if self.entropy_bonus != 0.0:
-                halt_step_entropy = halt_dist.entropy()  # (N,)
-            else:
-                halt_step_entropy = torch.zeros_like(halt_step_logprob)
-
-            step_mask = active.float()
-
-            total_logprob = total_logprob + halt_step_logprob * step_mask
-            total_entropy = total_entropy + halt_step_entropy * step_mask
-
-            just_halted = active & (halt_action == 1)
-
-            if just_halted.any():
-                final_actions[just_halted] = grid_action[just_halted]
-                final_steps[just_halted] = float(step + 1)
-
-            active = active & (halt_action == 0)
+        new_carry.halted = new_carry.halted | (halt_action == 1)
         
-        if active.any():
-            if grid_action is None:
-                carry, outputs = self.model(carry=carry, batch=expanded_batch, **model_kwargs)
-                logits = outputs["logits"]
-                grid_action = torch.argmax(logits, dim=-1)
+        halt_step_logprob = halt_dist.log_prob(halt_action)  # (N,)
 
-        final_actions[active] = grid_action[active]
-        final_steps[active] = float(self.max_steps)
-            
-        labels = expanded_batch["labels"]
-        pred = final_actions
+        # entropy (optional)
+        halt_step_entropy = torch.zeros_like(halt_step_logprob)
+        if self.entropy_bonus != 0.0:
+            halt_step_entropy = halt_dist.entropy()  # (N,)
 
-        exact = self._seq_exact_correct(pred, labels)
-        r_correct = exact.float() * self.correct_reward
+        step_mask = (~new_carry.halted).float()
 
-        # length penalty (normalize to [0,1])
-        r_len = -self.len_penalty * (final_steps / max(1, self.max_steps))
+        new_carry.total_logprob = new_carry.total_logprob + halt_step_logprob * step_mask
+        new_carry.total_entropy = new_carry.total_entropy + halt_step_entropy * step_mask
 
-        rewards = r_correct + r_len
+        with torch.no_grad():
+            # Preds
+            outputs["preds"] = torch.argmax(outputs["logits"], dim=-1)
 
-        # group baseline (GRPO)
-        rewards_grouped = rewards.view(B, G)
-        baseline = rewards_grouped.mean(dim=1, keepdim=True)
-        std = rewards_grouped.std(dim=1, keepdim=True) + 1e-8
-        adv = (rewards_grouped - baseline) / std
-        adv = adv.view(-1)
+            # add to final actions if halted at this step
+            # new_carry.halted: previous halted and max step halted
+            # halt_action: this step halted
+            just_halted = (~new_carry.halted) & (halt_action == 1)
+            if just_halted.any():
+                new_carry.final_actions[just_halted] = outputs["preds"][just_halted]
+                new_carry.final_steps[just_halted] = new_carry.current_step.int()
+
+            # Correctness
+            mask = (labels != IGNORE_LABEL_ID)
+            loss_counts = mask.sum(-1)
+            loss_divisor = loss_counts.clamp_min(1).unsqueeze(-1)
+
+            is_correct = mask & (torch.argmax(outputs["logits"], dim=-1) == labels)
+            seq_is_correct = is_correct.sum(-1) == loss_counts
+
+            # Metrics (halted)
+            valid_metrics = new_carry.halted & (loss_counts > 0)
+            metrics = {
+                "count": valid_metrics.sum(),
+                
+                "accuracy":       torch.where(valid_metrics, (is_correct.to(torch.float32) / loss_divisor).sum(-1), 0).sum(),
+                "exact_accuracy": (valid_metrics & seq_is_correct).sum(),
+
+                "q_halt_accuracy": (valid_metrics & ((outputs["q_halt_logits"] >= 0) == seq_is_correct)).sum(),
+                "steps":          torch.where(valid_metrics, new_carry.current_step.int(), 0).sum(),
+            }
+
+            # if not finished yet
+            if not new_carry.halted.all():
+                return new_carry, None, metrics, None, new_carry.halted.all()
+                
+            r_correct = seq_is_correct * self.correct_reward
+
+            # length penalty (normalize to [0,1])
+            r_len = torch.where(seq_is_correct, -self.len_penalty * (new_carry.final_steps / max(1, self.model.config.halt_max_steps)), torch.zeros_like(seq_is_correct))
+
+            rewards = r_correct + r_len
+
+            # group baseline (GRPO)
+            rewards_grouped = rewards.view(B, G)
+            baseline = rewards_grouped.mean(dim=1, keepdim=True)
+            std = rewards_grouped.std(dim=1, keepdim=True) + 1e-8
+            adv = (rewards_grouped - baseline) / std
+            adv = adv.view(-1)
 
         # policy gradient loss
-        pg_loss: torch.Tensor = -(adv.detach() * total_logprob).sum()
+        pg_loss: torch.Tensor = -(adv * new_carry.total_logprob).sum()
         
         ent_loss: torch.Tensor = torch.tensor(0.0, device=device)
         # optional entropy bonus (maximize entropy => subtract negative)
         if self.entropy_bonus != 0.0:
-            ent_loss = -self.entropy_bonus * (total_entropy / max(1, self.max_steps)).sum()
+            ent_loss: torch.Tensor = -self.entropy_bonus * (new_carry.total_entropy / max(1, self.model.config.halt_max_steps)).sum()
         
-        loss = (pg_loss + ent_loss) / float(G)
+        grpo_loss: torch.Tensor = (pg_loss + ent_loss) / float(G)
 
-        # metrics (no grad)
-        with torch.no_grad():
-            metrics = {
-                "count": torch.tensor(N, device=device, dtype=torch.float32),
-                "loss": loss.detach(),
-                "pg_loss": pg_loss.detach(),
-                "exact_accuracy": exact.float().mean(),
-                "avg_steps": final_steps.mean(),
-                "avg_reward": rewards.mean(),
-            }
+        metrics.update({
+            "grpo_loss": grpo_loss.detach(),
+            "pg_loss": pg_loss.detach(),
+            "ent_loss": ent_loss.detach(),
+            "reward": rewards.sum(),
+        })
 
         detached_outputs = {k: outputs[k].detach() for k in return_keys if k in outputs}
-        # rollout -> no carry
-        carry = None
-        all_finish = torch.tensor(True, device=device)
 
-        return carry, loss, metrics, detached_outputs, all_finish
+        return new_carry, grpo_loss, metrics, detached_outputs, new_carry.halted.all()
