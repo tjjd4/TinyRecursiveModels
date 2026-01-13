@@ -48,6 +48,8 @@ class TrainRLConfig(pydantic.BaseModel):
     # Data
     data_paths: List[str]
     data_paths_test: List[str] = []
+    # Evaluators
+    evaluators: List[EvaluatorConfig] = []
 
     # Hyperparams
     global_batch_size: int
@@ -259,6 +261,22 @@ def compute_lr(base_lr: float, config: TrainRLConfig, train_state: TrainState):
         min_ratio=config.lr_min_ratio
     )
 
+
+def create_evaluators(config: TrainRLConfig, eval_metadata: PuzzleDatasetMetadata) -> List[Any]:
+    data_paths = config.data_paths_test if len(config.data_paths_test) > 0 else config.data_paths
+    # Initialize evaluators
+    evaluators = []
+    if hasattr(config, 'evaluators'):
+        for cfg in config.evaluators:
+            for data_path in data_paths:
+                cls = load_model_class(cfg.name, "evaluators.")(
+                    data_path=data_path, eval_metadata=eval_metadata, **cfg.__pydantic_extra__
+                )  # type: ignore
+                evaluators.append(cls)
+
+    return evaluators
+
+
 # [Gradient Accumulation] add parameter `is_update_step` to indicate whether this is a true update step
 def train_batch(config: TrainRLConfig, train_state: TrainState, batch: Any, global_batch_size: int, rank: int, world_size: int, is_update_step: bool = True):
     # [Gradient Accumulation] count step only when true update (after gradient accumulation)
@@ -367,14 +385,16 @@ def evaluate(
             
             # To device
             batch = {k: v.cuda() for k, v in batch.items()}
+            expanded_batch = train_state.model.expand_batch(batch, config.arch.loss.num_generations)
+
             with torch.device("cuda"):
-                carry = train_state.model.initial_carry(batch)  # type: ignore
+                carry = train_state.model.initial_carry(expanded_batch)  # type: ignore
 
             # Forward
             inference_steps = 0
             while True:
                 carry, loss, metrics, preds, all_finish = train_state.model(
-                    carry=carry, batch=batch, return_keys=return_keys
+                    carry=carry, batch=expanded_batch, return_keys=return_keys
                 )
                 inference_steps += 1
 
