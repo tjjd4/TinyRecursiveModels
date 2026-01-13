@@ -76,7 +76,8 @@ class GRPOLossHead(nn.Module):
         halt_dist = torch.distributions.Categorical(logits=halt_logits)
         halt_action = halt_dist.sample()  # (N,) 0=Cont, 1=Halt
 
-        new_carry.halted = new_carry.halted | (halt_action == 1)
+        # Mask for sequences that were active before this step
+        step_mask = (~new_carry.halted).float()
         
         halt_step_logprob = halt_dist.log_prob(halt_action)  # (N,)
 
@@ -85,8 +86,8 @@ class GRPOLossHead(nn.Module):
         if self.entropy_bonus != 0.0:
             halt_step_entropy = halt_dist.entropy()  # (N,)
 
-        step_mask = (~new_carry.halted).float()
-
+        # Accumulate log_prob and entropy for active sequences
+        # step_mask ensures only accumulate for sequences that haven't halted yet (including the current step)
         new_carry.total_logprob = new_carry.total_logprob + halt_step_logprob * step_mask
         new_carry.total_entropy = new_carry.total_entropy + halt_step_entropy * step_mask
 
@@ -94,10 +95,12 @@ class GRPOLossHead(nn.Module):
             # Preds
             outputs["preds"] = torch.argmax(outputs["logits"], dim=-1)
 
-            # add to final actions if halted at this step
-            # new_carry.halted: previous halted and max step halted
-            # halt_action: this step halted
+            # Calculate just_halted and step_mask BEFORE updating new_carry.halted
             just_halted = (~new_carry.halted) & (halt_action == 1)
+            
+            new_carry.halted = new_carry.halted | (halt_action == 1)
+
+            # add to final actions if halted at this step
             if just_halted.any():
                 new_carry.final_actions[just_halted] = outputs["preds"][just_halted]
                 new_carry.final_steps[just_halted] = new_carry.current_step.int()
@@ -107,7 +110,7 @@ class GRPOLossHead(nn.Module):
             loss_counts = mask.sum(-1)
             loss_divisor = loss_counts.clamp_min(1).unsqueeze(-1)
 
-            is_correct = mask & (torch.argmax(outputs["logits"], dim=-1) == labels)
+            is_correct = mask & (new_carry.final_actions == labels)
             seq_is_correct = is_correct.sum(-1) == loss_counts
 
             # Metrics (halted)
@@ -146,7 +149,7 @@ class GRPOLossHead(nn.Module):
         ent_loss: torch.Tensor = torch.tensor(0.0, device=device)
         # optional entropy bonus (maximize entropy => subtract negative)
         if self.entropy_bonus != 0.0:
-            ent_loss: torch.Tensor = -self.entropy_bonus * (new_carry.total_entropy / max(1, self.model.config.halt_max_steps)).sum()
+            ent_loss: torch.Tensor = -self.entropy_bonus * (new_carry.total_entropy / new_carry.current_step.float().clamp_min(1)).sum()
         
         grpo_loss: torch.Tensor = (pg_loss + ent_loss) / float(G)
 
