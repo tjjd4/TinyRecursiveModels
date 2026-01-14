@@ -57,6 +57,9 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
         new_inner_carry = self.inner.reset_carry(carry.halted, carry.inner_carry)
         
         new_current_step = torch.where(carry.halted.all(), 0, carry.current_step)
+
+        new_final_actions = carry.final_actions.clone()
+        new_final_steps = carry.final_steps.clone()
         """
         for streaming training
         """
@@ -76,30 +79,55 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
             "q_continue_logits": q_continue_logits # (B,)
         }
 
+        # Step
+        new_current_step = new_current_step + 1
+        
+        halt_logits = torch.stack([q_continue_logits, q_halt_logits], dim=-1)  # (N, 2)
+        halt_logits = torch.nan_to_num(halt_logits, nan=0.0)
+        
+        halt_dist = torch.distributions.Categorical(logits=halt_logits)
+        
+        # Training: sample for exploration; Eval: argmax for deterministic prediction
+        if self.training:
+            halt_action = halt_dist.sample()  # (N,) 0=Cont, 1=Halt
+        else:
+            halt_action = halt_logits.argmax(dim=-1)  # (N,) deterministic
+
+        if new_current_step >= self.config.halt_max_steps:
+            halt_action = torch.ones_like(halt_action)
+    
+        # Mask for sequences that were active before this step
+        step_mask = (~carry.halted).float()
+        
+        halt_step_logprob = halt_dist.log_prob(halt_action)  # (N,)
+        # entropy (optional)
+        halt_step_entropy = halt_dist.entropy()  # (N,)
+
+        # Accumulate log_prob and entropy for active sequences
+        # step_mask ensures only accumulate for sequences that haven't halted yet (including the current step)
+        new_total_logprob = carry.total_logprob + halt_step_logprob * step_mask
+        new_total_entropy = carry.total_entropy + halt_step_entropy * step_mask
+
         with torch.no_grad():
-            # Step
-            new_current_step = new_current_step + 1
-            is_last_step = new_current_step >= self.config.halt_max_steps
+            preds = logits.argmax(dim=-1)
+            # Calculate just_halted and step_mask BEFORE updating carry.halted
+            just_halted = (~carry.halted) & (halt_action == 1)
+            new_halted = carry.halted | (halt_action == 1)
 
-            # ONLY check if is last step, give rl loss head to sample halt action
-            halted = is_last_step
-
-            # if self.training and self.config.halt_max_steps > 1:
-            #     halted = halted | (q_halt_logits > q_continue_logits)
-
-            #     # Exploration
-            #     min_halt_steps = (torch.rand_like(q_halt_logits) < self.config.halt_exploration_prob) * torch.randint_like(new_steps, low=2, high=self.config.halt_max_steps + 1)
-            #     halted = halted & (new_steps >= min_halt_steps)
+            # add to final actions if halted at this step
+            if just_halted.any():
+                new_final_actions[just_halted] = preds[just_halted]
+                new_final_steps[just_halted] = new_current_step.int()
 
         new_carry = TinyRecursiveReasoningModel_GRPOCarry(
             inner_carry=new_inner_carry,
             current_step=new_current_step,
-            halted=halted,
+            halted=new_halted,
             current_data=new_current_data,
-            total_logprob=carry.total_logprob,
-            total_entropy=carry.total_entropy,
-            final_actions=carry.final_actions,
-            final_steps=carry.final_steps,
+            total_logprob=new_total_logprob,
+            total_entropy=new_total_entropy,
+            final_actions=new_final_actions,
+            final_steps=new_final_steps,
         )
 
         return new_carry, outputs

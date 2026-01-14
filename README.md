@@ -79,7 +79,7 @@ run_name="grpo_mlp_t_sudoku"
 python train_rl.py \
 arch=trm_rl \
 data_paths="[data/sudoku-extreme-1k-aug-1000]" \
-evaluators=[] \
+evaluators="[]" \
 epochs=500 eval_interval=50 \
 lr=1e-4 puzzle_emb_lr=1e-4 weight_decay=1.0 puzzle_emb_weight_decay=1.0 \
 arch.mlp_t=True arch.pos_encodings=none \
