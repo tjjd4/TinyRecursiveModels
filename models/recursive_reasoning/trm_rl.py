@@ -82,11 +82,14 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
         # Step
         new_current_step = new_current_step + 1
         
-        halt_logits = torch.stack([q_continue_logits, q_halt_logits], dim=-1)  # (N, 2)
-        halt_logits = torch.nan_to_num(halt_logits, nan=0.0)
-        
-        halt_dist = torch.distributions.Categorical(logits=halt_logits)
-        
+        if not self.config.no_ACT_continue:
+            halt_logits = torch.stack([q_continue_logits, q_halt_logits], dim=-1)  # (N, 2)
+            halt_logits = torch.nan_to_num(halt_logits, nan=0.0)
+            
+            halt_dist = torch.distributions.Categorical(logits=halt_logits)
+        else:
+            halt_dist = torch.distributions.Bernoulli(logits=q_halt_logits)
+
         # Training: sample for exploration; Eval: argmax for deterministic prediction
         if self.training:
             halt_action = halt_dist.sample()  # (N,) 0=Cont, 1=Halt
