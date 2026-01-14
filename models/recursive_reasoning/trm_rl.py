@@ -33,7 +33,7 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
             inner_carry=self.inner.empty_carry(batch_size),
             
             current_step=torch.tensor(0, device=device, dtype=torch.int),
-            halted=torch.ones((batch_size,), dtype=torch.bool, device=device),
+            halted=torch.ones(batch_size, dtype=torch.bool, device=device),
 
             total_logprob=torch.zeros(batch_size, device=device),
             total_entropy=torch.zeros(batch_size, device=device),
@@ -41,6 +41,20 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
             final_steps=torch.zeros(batch_size, device=device),
 
             current_data={k: torch.empty_like(v) for k, v in batch.items()},
+        )
+
+    def reset_carry(self, reset_flag: torch.Tensor, carry: TinyRecursiveReasoningModel_GRPOCarry):
+        # Update data, carry (removing halted sequences)
+        new_inner_carry = self.inner.reset_carry(reset_flag, carry.inner_carry)
+        return TinyRecursiveReasoningModel_GRPOCarry(
+            inner_carry=new_inner_carry,
+            current_step=torch.tensor(0),
+            halted=torch.zeros_like(carry.halted),
+            total_logprob=torch.zeros_like(carry.total_logprob),
+            total_entropy=torch.zeros_like(carry.total_entropy),
+            final_actions=torch.zeros_like(carry.final_actions),
+            final_steps=torch.zeros_like(carry.final_steps),
+            current_data={k: torch.empty_like(v) for k, v in carry.current_data.items()},
         )
 
     def forward(
@@ -51,11 +65,8 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
 
         if carry.halted.all():
             with torch.device("cuda"):
-                carry = self.initial_carry(batch)
+                carry = self.reset_carry(carry.halted, carry)
 
-        # Update data, carry (removing halted sequences)
-        new_inner_carry = self.inner.reset_carry(carry.halted, carry.inner_carry)
-        
         new_current_step = torch.where(carry.halted.all(), 0, carry.current_step)
 
         new_final_actions = carry.final_actions.clone()
@@ -71,7 +82,8 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
         new_current_data = {k: v.clone() for k, v in batch.items()}
 
         # Forward inner model
-        new_inner_carry, logits, (q_halt_logits, q_continue_logits) = self.inner(new_inner_carry, new_current_data)
+        new_inner_carry, logits, (q_halt_logits, q_continue_logits) = self.inner(carry.inner_carry, new_current_data)
+
 
         outputs = {
             "logits": logits,  # (B, L, V)
@@ -81,11 +93,11 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
 
         # Step
         new_current_step = new_current_step + 1
-        
+
         if not self.config.no_ACT_continue:
             halt_logits = torch.stack([q_continue_logits, q_halt_logits], dim=-1)  # (N, 2)
             halt_logits = torch.nan_to_num(halt_logits, nan=0.0)
-            
+
             halt_dist = torch.distributions.Categorical(logits=halt_logits)
         else:
             halt_dist = torch.distributions.Bernoulli(logits=q_halt_logits)
@@ -98,10 +110,10 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
 
         if new_current_step >= self.config.halt_max_steps:
             halt_action = torch.ones_like(halt_action)
-    
+
         # Mask for sequences that were active before this step
         step_mask = (~carry.halted).float()
-        
+
         halt_step_logprob = halt_dist.log_prob(halt_action)  # (N,)
         # entropy (optional)
         halt_step_entropy = halt_dist.entropy()  # (N,)
@@ -120,7 +132,7 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
             # add to final actions if halted at this step
             if just_halted.any():
                 new_final_actions[just_halted] = preds[just_halted]
-                new_final_steps[just_halted] = new_current_step.int()
+                new_final_steps[just_halted] = new_current_step.float()
 
         new_carry = TinyRecursiveReasoningModel_GRPOCarry(
             inner_carry=new_inner_carry,
