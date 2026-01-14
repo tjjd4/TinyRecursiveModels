@@ -1,32 +1,33 @@
 from typing import Any, Tuple, Dict, Sequence, Optional
 
+from pydantic import BaseModel
 import torch
 import torch.nn.functional as F
 from torch import nn
 import math
 from models.losses.loss_fn import IGNORE_LABEL_ID
+from utils.functions import load_model_class
+
+
+class GRPOLossConfig(BaseModel):
+    num_generations: int
+    entropy_bonus: float
+    reward_cfg: dict
 
 class GRPOLossHead(nn.Module):
-    """
-      - outputs_dict["logits"]: (B, L, V) non-autoregressive grid logits
-      - outputs_dict["q_halt_logits"], outputs_dict["q_continue_logits"]: (B,) 供 halting action (0=continue,1=halt)
-    """
-
     def __init__(
         self,
         model: nn.Module,
-        num_generations: int,
-        len_penalty: float,
-        correct_reward: float,
-        entropy_bonus: float,
+        config_dict: dict,
     ):
         super().__init__()
         self.model = model
+        self.config = GRPOLossConfig(**config_dict)
 
-        self.num_generations = int(num_generations)
-        self.len_penalty = float(len_penalty)
-        self.correct_reward = float(correct_reward)
-        self.entropy_bonus = float(entropy_bonus)
+        reward_cfg = self.config.reward_cfg
+
+        reward_cls = load_model_class(reward_cfg.pop("name"))
+        self.reward_fn = reward_cls(reward_cfg)
 
     def initial_carry(self, *args, **kwargs):
         return self.model.initial_carry(*args, **kwargs)  # type: ignore
@@ -128,13 +129,12 @@ class GRPOLossHead(nn.Module):
             # if not finished yet
             if not new_carry.halted.all():
                 return new_carry, None, metrics, None, new_carry.halted.all()
-                
-            r_correct = seq_is_correct * self.correct_reward
 
-            # length penalty (normalize to [0,1])
-            r_len = torch.where(seq_is_correct, -self.len_penalty * (new_carry.final_steps / max(1, self.model.config.halt_max_steps)), torch.zeros_like(seq_is_correct))
-
-            rewards = r_correct + r_len
+            rewards = self.reward_fn.compute(
+                seq_is_correct=seq_is_correct,
+                final_steps=new_carry.final_steps,
+                max_steps=self.model.config.halt_max_steps
+            )
 
             # group baseline (GRPO)
             rewards_grouped = rewards.view(B, G)

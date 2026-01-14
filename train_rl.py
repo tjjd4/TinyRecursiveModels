@@ -24,11 +24,15 @@ from utils.functions import load_model_class, get_model_source_path
 from models.sparse_embedding import CastedSparseEmbeddingSignSGD_Distributed
 from models.ema import EMAHelper
 
+class RewardConfig(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra='allow')
+    name: str
 
 class LossConfig(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra='allow')
     name: str
     num_generations: int
+    reward: RewardConfig
 
 
 class ArchConfig(pydantic.BaseModel):
@@ -129,6 +133,16 @@ def create_model(config: TrainRLConfig, train_metadata: PuzzleDatasetMetadata, r
         causal=False  # Non-autoregressive
     )
 
+    loss_cfg = dict(
+        **config.arch.loss.__pydantic_extra__,
+        name=config.arch.loss.name,
+        num_generations=config.arch.loss.num_generations,
+        reward_cfg=dict(
+            **config.arch.loss.reward.__pydantic_extra__,
+            name=config.arch.loss.reward.name,
+        )
+    )
+
     # Instantiate model with loss head
     model_cls = load_model_class(config.arch.name)
     loss_head_cls = load_model_class(config.arch.loss.name)
@@ -137,7 +151,7 @@ def create_model(config: TrainRLConfig, train_metadata: PuzzleDatasetMetadata, r
         model: nn.Module = model_cls(model_cfg)
         print(model)
         # Pass RL config parameters to loss head
-        model = loss_head_cls(model, config.arch.loss.num_generations, **config.arch.loss.__pydantic_extra__)  # type: ignore
+        model = loss_head_cls(model, loss_cfg)  # type: ignore
         if "DISABLE_COMPILE" not in os.environ:
             model = torch.compile(model)  # type: ignore
 
