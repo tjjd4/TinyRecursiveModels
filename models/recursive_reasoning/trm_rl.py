@@ -121,7 +121,7 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
         # Mask for sequences that were active before this step
         step_mask = (~carry.halted).float()
 
-        halt_step_logprob = halt_dist.log_prob(halt_action)  # (N,)
+        halt_step_logprob = halt_dist.log_prob(halt_action.float())  # (N,)
         # entropy (optional)
         halt_step_entropy = halt_dist.entropy()  # (N,)
 
