@@ -91,7 +91,6 @@ class TrainRLConfig(pydantic.BaseModel):
     ema_rate: float = 0.999 # EMA-rate
     freeze_weights: bool = False # If True, freeze weights and only learn the embeddings
 
-# [RL] rollout no carry between states
 @dataclass
 class TrainState:
     model: nn.Module
@@ -117,7 +116,7 @@ def create_dataloader(config: TrainRLConfig, split: str, rank: int, world_size: 
         num_workers=1,
         prefetch_factor=8,
         pin_memory=True,
-        persistent_workers=False
+        persistent_workers=True
     )
     return dataloader, dataset.metadata
 
@@ -185,17 +184,49 @@ def create_model(config: TrainRLConfig, train_metadata: PuzzleDatasetMetadata, r
         print(f"Trainable parameters: {sum(p.numel() for p in trainable_params)}")
 
     # Optimizers and lr
-    optimizers = [
-        AdamATan2(
-            trainable_params,  # only trainable parameters reduce memory usage
-            lr=0,  # needs to be set by scheduler
-            weight_decay=config.weight_decay,
-            betas=(config.beta1, config.beta2)
-        )
-    ]
-    optimizer_lrs = [
-        config.lr
-    ]
+    if config.arch.puzzle_emb_ndim == 0:
+        optimizers = [
+            AdamATan2(
+                model.parameters(),
+                lr=0,  # Needs to be set by scheduler
+                weight_decay=config.weight_decay,
+                betas=(config.beta1, config.beta2)
+            )
+        ]
+        optimizer_lrs = [
+            config.lr
+        ]
+    elif config.freeze_weights:
+        optimizers = [
+            CastedSparseEmbeddingSignSGD_Distributed(
+                model.model.puzzle_emb.buffers(),  # type: ignore
+                lr=0,  # Needs to be set by scheduler
+                weight_decay=config.puzzle_emb_weight_decay,
+                world_size=world_size
+            )
+        ]
+        optimizer_lrs = [
+            config.puzzle_emb_lr
+        ]
+    else:
+        optimizers = [
+            CastedSparseEmbeddingSignSGD_Distributed(
+                model.model.puzzle_emb.buffers(),  # type: ignore
+                lr=0,  # Needs to be set by scheduler
+                weight_decay=config.puzzle_emb_weight_decay,
+                world_size=world_size
+            ),
+            AdamATan2(
+                model.parameters(),
+                lr=0,  # Needs to be set by scheduler
+                weight_decay=config.weight_decay,
+                betas=(config.beta1, config.beta2)
+            )
+        ]
+        optimizer_lrs = [
+            config.puzzle_emb_lr,
+            config.lr
+        ]
 
     return model, optimizers, optimizer_lrs
 
