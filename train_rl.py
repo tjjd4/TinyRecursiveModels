@@ -399,16 +399,16 @@ def evaluate(
             
             # To device
             batch = {k: v.cuda() for k, v in batch.items()}
-            expanded_batch = train_state.model.expand_batch(batch, config.arch.loss.num_generations)
+            # expanded_batch = train_state.model.expand_batch(batch, config.arch.loss.num_generations)
 
             with torch.device("cuda"):
-                carry = train_state.model.initial_carry(expanded_batch)  # type: ignore
+                carry = train_state.model.initial_carry(batch)  # type: ignore
 
             # Forward
             inference_steps = 0
             while True:
                 carry, loss, metrics, preds, all_finish = train_state.model(
-                    carry=carry, batch=expanded_batch, return_keys=return_keys
+                    carry=carry, batch=batch, return_keys=return_keys
                 )
                 inference_steps += 1
 
