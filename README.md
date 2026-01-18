@@ -59,15 +59,18 @@ python dataset/build_sudoku_dataset.py --output-dir data/sudoku-extreme-1k-aug-1
 python dataset/build_maze_dataset.py # 1000 examples, 8 augments
 ```
 
-## Testing
+## Evaluation
 
 ```bash
-python test.py \
+run_name="eval_mlp_t_sudoku_44"
+python eval.py \
 arch=trm \
 data_paths="[data/sudoku-extreme-1k-aug-1000]" \
-load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_gradient_accumlation_baseline/step_65104" \
 arch.mlp_t=True arch.pos_encodings=none \
-num_samples=10
+arch.L_layers=2 \
+arch.H_cycles=3 arch.L_cycles=6 \
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_gradient_accumlation_baseline/step_65104" \
++run_name=${run_name}
 ```
 
 ## RL Experiments

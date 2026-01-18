@@ -4,6 +4,9 @@ defaults:
   - arch: trm
   - _self_
 
+eval_loss:
+  name: losses.eval_loss@EvalLossHead
+
 hydra:
   output_subdir: null
 
@@ -14,10 +17,11 @@ load_checkpoint: ""
 data_paths: ['data/arc-aug-1000']
 data_paths_test: []
 
-# Test parameters
-num_samples: 10  # Number of random samples to test
-show_intermediate_steps: False  # Whether to show each reasoning step
+evaluators:
+  - name: arc@ARC
+
+# Hyperparams - Training
+global_batch_size: 768
 
 # Inference parameters
-batch_size: 1  # Batch size for inference (typically 1 for detailed output)
 seed: 0
