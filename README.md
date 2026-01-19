@@ -62,10 +62,11 @@ python dataset/build_maze_dataset.py # 1000 examples, 8 augments
 ## Evaluation
 
 ```bash
-run_name="eval_mlp_t_sudoku_44"
+run_name="eval_mlp_t_sudoku"
 python eval.py \
 arch=trm \
 data_paths="[data/sudoku-extreme-1k-aug-1000]" \
+evaluators="[]" \
 arch.mlp_t=True arch.pos_encodings=none \
 arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=6 \

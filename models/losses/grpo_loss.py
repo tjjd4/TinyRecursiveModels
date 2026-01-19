@@ -1,6 +1,6 @@
 from typing import Any, Tuple, Dict, Sequence, Optional
 
-from pydantic import BaseModel
+import pydantic
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -8,11 +8,14 @@ import math
 from models.losses.loss_fn import IGNORE_LABEL_ID
 from utils.functions import load_model_class
 
+class RewardConfig(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra='allow')
+    name: str
 
-class GRPOLossConfig(BaseModel):
+class GRPOLossConfig(pydantic.BaseModel):
     num_generations: int
     entropy_bonus: float
-    reward_cfg: dict
+    reward: RewardConfig
 
 class GRPOLossHead(nn.Module):
     def __init__(
@@ -24,9 +27,11 @@ class GRPOLossHead(nn.Module):
         self.model = model
         self.config = GRPOLossConfig(**config_dict)
 
-        reward_cfg = self.config.reward_cfg
+        reward_cfg = dict(
+            **self.config.reward.__pydantic_extra__,
+        )
 
-        reward_cls = load_model_class(reward_cfg.pop("name"))
+        reward_cls = load_model_class(self.config.reward.name)
         self.reward_fn = reward_cls(reward_cfg)
 
     def initial_carry(self, *args, **kwargs):
@@ -89,7 +94,7 @@ class GRPOLossHead(nn.Module):
                 "exact_accuracy": (valid_metrics & seq_is_correct).sum(),
 
                 "q_halt_accuracy": (valid_metrics & ((outputs["q_halt_logits"] >= 0) == seq_is_correct)).sum(),
-                "steps":          torch.where(valid_metrics, new_carry.current_step.int(), 0).sum(),
+                "steps":          torch.where(valid_metrics, new_carry.steps, 0).sum(),
             }
 
             # if not finished yet
@@ -115,7 +120,7 @@ class GRPOLossHead(nn.Module):
         ent_loss: torch.Tensor = torch.tensor(0.0, device=device)
         # optional entropy bonus (maximize entropy => subtract negative)
         if self.config.entropy_bonus != 0.0:
-            ent_loss: torch.Tensor = -self.config.entropy_bonus * (new_carry.total_entropy / new_carry.current_step.float().clamp_min(1)).sum()
+            ent_loss: torch.Tensor = -self.config.entropy_bonus * (new_carry.total_entropy / new_carry.final_steps.clamp_min(1)).mean()
         
         grpo_loss: torch.Tensor = (pg_loss + ent_loss) / float(G)
 

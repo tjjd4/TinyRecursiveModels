@@ -13,7 +13,7 @@ from .trm import (
 @dataclass
 class TinyRecursiveReasoningModel_GRPOCarry:
     inner_carry: TinyRecursiveReasoningModel_ACTV1InnerCarry
-    current_step: torch.Tensor
+    steps: torch.Tensor
     halted: torch.Tensor
 
     total_logprob: torch.Tensor    # (N,)
@@ -32,7 +32,7 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
         return TinyRecursiveReasoningModel_GRPOCarry(
             inner_carry=self.inner.empty_carry(batch_size),
             
-            current_step=torch.tensor(0, device=device, dtype=torch.int),
+            steps=torch.zeros((batch_size, ), dtype=torch.int32, device=device),
             halted=torch.ones(batch_size, dtype=torch.bool, device=device),
 
             total_logprob=torch.zeros(batch_size, device=device),
@@ -48,7 +48,7 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
         new_inner_carry = self.inner.reset_carry(reset_flag, carry.inner_carry)
         return TinyRecursiveReasoningModel_GRPOCarry(
             inner_carry=new_inner_carry,
-            current_step=torch.tensor(0),
+            steps=torch.zeros_like(carry.steps),
             halted=torch.zeros_like(carry.halted),
             total_logprob=torch.zeros_like(carry.total_logprob),
             total_entropy=torch.zeros_like(carry.total_entropy),
@@ -67,7 +67,7 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
             with torch.device("cuda"):
                 carry = self.reset_carry(carry.halted, carry)
 
-        new_current_step = torch.where(carry.halted.all(), 0, carry.current_step)
+        new_steps = torch.where(carry.halted.all(), 0, carry.steps)
 
         new_final_actions = carry.final_actions.clone()
         new_final_steps = carry.final_steps.clone()
@@ -92,7 +92,7 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
         }
 
         # Step
-        new_current_step = new_current_step + 1
+        new_steps = new_steps + 1
 
         """
         if no_ACT_continue == false, q_continue_logits weight = 0 => NO usage of q_continue_logits
@@ -114,9 +114,9 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
                 halt_action = halt_logits.argmax(dim=-1)  # (N,) deterministic
             else:
                 halt_action = (halt_logits > 0).long()
-
-        if new_current_step >= self.config.halt_max_steps:
-            halt_action = torch.ones_like(halt_action)
+        
+        max_step_mask = (new_steps >= self.config.halt_max_steps)
+        halt_action = torch.where(max_step_mask, torch.ones_like(halt_action), halt_action)
 
         # Mask for sequences that were active before this step
         step_mask = (~carry.halted).float()
@@ -139,11 +139,11 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
             # add to final actions if halted at this step
             if just_halted.any():
                 new_final_actions[just_halted] = preds[just_halted]
-                new_final_steps[just_halted] = new_current_step.float()
+                new_final_steps[just_halted] = new_steps[just_halted].float()
 
         new_carry = TinyRecursiveReasoningModel_GRPOCarry(
             inner_carry=new_inner_carry,
-            current_step=new_current_step,
+            steps=new_steps,
             halted=new_halted,
             current_data=new_current_data,
             total_logprob=new_total_logprob,
