@@ -101,6 +101,9 @@ class TrainState:
     step: int
     total_steps: int
 
+    # [Gradient Accumulation] accumulator for metrics across micro batches
+    accumulated_metrics: Optional[Dict[str, float]] = None
+
 
 def create_dataloader(config: TrainRLConfig, split: str, rank: int, world_size: int, **kwargs):
     dataset = PuzzleDataset(PuzzleDatasetConfig(
@@ -134,9 +137,8 @@ def create_model(config: TrainRLConfig, train_metadata: PuzzleDatasetMetadata, r
 
     loss_cfg = dict(
         **config.arch.loss.__pydantic_extra__,
-        name=config.arch.loss.name,
         num_generations=config.arch.loss.num_generations,
-        reward_cfg=dict(
+        reward=dict(
             **config.arch.loss.reward.__pydantic_extra__,
             name=config.arch.loss.reward.name,
         )
@@ -346,7 +348,23 @@ def train_batch(config: TrainRLConfig, train_state: TrainState, batch: Any, glob
         if all_finish:
             break
     
+    # [Gradient Accumulation] divide loss by the real global batch size
     ((1.0 / config.global_batch_size) * loss).backward()
+
+    # [Gradient Accumulation] accumulate metrics
+    if metrics:
+        assert not any(v.requires_grad for v in metrics.values())
+        
+        metric_keys = list(sorted(metrics.keys()))  # Sort keys to guarantee all processes use the same order.
+        # Reduce and reconstruct
+        metric_values = torch.stack([metrics[k] for k in metric_keys])
+        if not train_state.accumulated_metrics:
+            train_state.accumulated_metrics = {}
+            for i, k in enumerate(metric_keys):
+                train_state.accumulated_metrics[k] = metric_values[i].clone()
+        else:
+            for i, k in enumerate(metric_keys):
+                train_state.accumulated_metrics[k] += metric_values[i]
 
     reduced_metrics = None
 
@@ -370,12 +388,13 @@ def train_batch(config: TrainRLConfig, train_state: TrainState, batch: Any, glob
             optim.zero_grad()
 
         # Reduce metrics to rank0
-        if metrics:
-            assert not any(v.requires_grad for v in metrics.values())
+        # [Gradient Accumulation] use accumulated metrics to stand for all micro batch metrics
+        if train_state.accumulated_metrics:
+            assert not any(v.requires_grad for v in train_state.accumulated_metrics.values())
 
-            metric_keys = list(sorted(metrics.keys()))  # Sort keys to guarantee all processes use the same order.
+            metric_keys = list(sorted(train_state.accumulated_metrics.keys()))  # Sort keys to guarantee all processes use the same order.
             # Reduce and reconstruct
-            metric_values = torch.stack([metrics[k] for k in metric_keys])
+            metric_values = torch.stack([train_state.accumulated_metrics[k] for k in metric_keys])
             if world_size > 1:
                 dist.reduce(metric_values, dst=0)
 
@@ -385,11 +404,12 @@ def train_batch(config: TrainRLConfig, train_state: TrainState, batch: Any, glob
 
                 # Postprocess
                 count = max(reduced_metrics["count"], 1)  # Avoid NaNs
-                # [Gradient Accumulation] use `global_batch_size` here is `MICRO_BATCH_SIZE` if config.micro_batch_size is set
-                reduced_metrics = {f"train/{k}": v / (global_batch_size if k.endswith("loss") else count) for k, v in reduced_metrics.items()}
+                # [Gradient Accumulation] use `config.global_batch_size` to make sure divide by the correct global batch size
+                reduced_metrics = {f"train/{k}": v / (config.global_batch_size if k.endswith("loss") else count) for k, v in reduced_metrics.items()}
 
                 reduced_metrics["train/lr"] = lr_this_step
-
+        # [Gradient Accumulation] reset accumulated metrics on update step
+        train_state.accumulated_metrics = None
     # [Gradient Accumulation] Non-update steps return None for metrics
     return reduced_metrics
 
