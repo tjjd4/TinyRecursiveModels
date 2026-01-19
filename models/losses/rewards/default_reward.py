@@ -3,8 +3,8 @@ from pydantic import BaseModel
 
 
 class DefaultRewardConfig(BaseModel):
-    correct_reward: float = 1.0
-    len_penalty: float = 0.1
+    correct_reward: float
+    len_penalty: float
 
 
 class DefaultReward:
@@ -15,7 +15,8 @@ class DefaultReward:
         self,
         seq_is_correct: torch.Tensor,
         final_steps: torch.Tensor,
-        max_steps: int
+        max_steps: int,
+        **kwargs
     ) -> torch.Tensor:
         # Correctness reward
         r_correct = seq_is_correct * self.config.correct_reward

@@ -4,9 +4,12 @@ loss:
   num_generations: 4
   entropy_bonus: 0.005
   reward:
-    name: losses.rewards.default_reward@DefaultReward
+    name: losses.rewards.adaptive_reward@AdaptiveReward
+    num_generations: ${..num_generations}
     correct_reward: 1.0
-    len_penalty: 0.1
+    len_penalty: 0.01
+    len_reward: 0.1
+    p_cutoff: 0.9
 
 halt_exploration_prob: 0.1
 halt_max_steps: 16
