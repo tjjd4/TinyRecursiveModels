@@ -62,7 +62,7 @@ python dataset/build_maze_dataset.py # 1000 examples, 8 augments
 ## Evaluation
 
 ```bash
-run_name="eval_mlp_t_sudoku"
+run_name="eval_pretrain_mlp_t_sudoku"
 python eval.py \
 arch=trm \
 data_paths="[data/sudoku-extreme-1k-aug-1000]" \
@@ -70,7 +70,7 @@ evaluators="[]" \
 arch.mlp_t=True arch.pos_encodings=none \
 arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=6 \
-load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_gradient_accumlation_baseline/step_65104" \
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_44/step_65104" \
 +run_name=${run_name}
 ```
 
@@ -89,7 +89,7 @@ lr=1e-4 puzzle_emb_lr=1e-4 weight_decay=1.0 puzzle_emb_weight_decay=1.0 \
 arch.mlp_t=True arch.pos_encodings=none \
 arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=6 \
-load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_gradient_accumlation_baseline/step_65104" \
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_78/step_65104" \
 +run_name=${run_name} ema=True
 ```
 
