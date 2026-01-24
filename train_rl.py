@@ -167,25 +167,6 @@ def create_model(config: TrainRLConfig, train_metadata: PuzzleDatasetMetadata, r
                 for param in list(model.parameters()) + list(model.buffers()):
                     dist.broadcast(param, src=0)
 
-    # freeze all params
-    for param in model.parameters():
-        param.requires_grad = False
-
-    try:
-        # unfreeze q_head
-        q_head_params = model.model.inner.q_head.parameters()
-        for param in q_head_params:
-            param.requires_grad = True
-        print(" -> Q-Head unfrozen successfully.")
-    except AttributeError as e:
-        print(f"Error unfreezing Q-Head: {e}")
-        print("Please check model structure strings.")
-        exit(1)
-
-    trainable_params = [p for p in model.parameters() if p.requires_grad]
-    if rank == 0:
-        print(f"Trainable parameters: {sum(p.numel() for p in trainable_params)}")
-
     # Optimizers and lr
     if config.arch.puzzle_emb_ndim == 0:
         optimizers = [
@@ -200,6 +181,9 @@ def create_model(config: TrainRLConfig, train_metadata: PuzzleDatasetMetadata, r
             config.lr
         ]
     elif config.freeze_weights:
+        for param in model.parameters():
+            param.requires_grad = False
+
         optimizers = [
             CastedSparseEmbeddingSignSGD_Distributed(
                 model.model.puzzle_emb.buffers(),  # type: ignore
@@ -212,6 +196,16 @@ def create_model(config: TrainRLConfig, train_metadata: PuzzleDatasetMetadata, r
             config.puzzle_emb_lr
         ]
     elif config.freeze_backbone:
+        for param in model.parameters():
+            param.requires_grad = False
+        try:
+            # unfreeze q_head
+            for param in model.model.inner.q_head.parameters():
+                param.requires_grad = True
+            print("Q-Head unfrozen successfully.")
+        except AttributeError as e:
+            print(f"Error unfreezing Q-Head: {e}")
+            exit(1)
         optimizers = [
             AdamATan2(
                 model.model.inner.q_head.parameters(),
