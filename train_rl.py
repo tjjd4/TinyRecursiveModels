@@ -183,6 +183,7 @@ def create_model(config: TrainRLConfig, train_metadata: PuzzleDatasetMetadata, r
     elif config.freeze_weights:
         for param in model.parameters():
             param.requires_grad = False
+        print(" -> All params frozen successfully.")
 
         optimizers = [
             CastedSparseEmbeddingSignSGD_Distributed(
@@ -202,7 +203,7 @@ def create_model(config: TrainRLConfig, train_metadata: PuzzleDatasetMetadata, r
             # unfreeze q_head
             for param in model.model.inner.q_head.parameters():
                 param.requires_grad = True
-            print("Q-Head unfrozen successfully.")
+            print(" -> Q-Head unfrozen successfully.")
         except AttributeError as e:
             print(f"Error unfreezing Q-Head: {e}")
             exit(1)
@@ -218,6 +219,7 @@ def create_model(config: TrainRLConfig, train_metadata: PuzzleDatasetMetadata, r
             config.lr
         ]
     else:
+        print(" -> All params enabled.")
         optimizers = [
             CastedSparseEmbeddingSignSGD_Distributed(
                 model.model.puzzle_emb.buffers(),  # type: ignore
