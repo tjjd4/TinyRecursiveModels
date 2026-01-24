@@ -90,6 +90,7 @@ class TrainRLConfig(pydantic.BaseModel):
     ema: bool = False # use Exponential-Moving-Average
     ema_rate: float = 0.999 # EMA-rate
     freeze_weights: bool = False # If True, freeze weights and only learn the embeddings
+    freeze_backbone: bool = False # If True, freeze backbone
 
 @dataclass
 class TrainState:
@@ -209,6 +210,18 @@ def create_model(config: TrainRLConfig, train_metadata: PuzzleDatasetMetadata, r
         ]
         optimizer_lrs = [
             config.puzzle_emb_lr
+        ]
+    elif config.freeze_backbone:
+        optimizers = [
+            AdamATan2(
+                model.model.inner.q_head.parameters(),
+                lr=0,  # Needs to be set by scheduler
+                weight_decay=config.weight_decay,
+                betas=(config.beta1, config.beta2)
+            )
+        ]
+        optimizer_lrs = [
+            config.lr
         ]
     else:
         optimizers = [
