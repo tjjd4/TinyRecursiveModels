@@ -27,7 +27,10 @@ class EvalLossHead(nn.Module):
 
         with torch.no_grad():
             # Preds
-            outputs["preds"] = torch.argmax(outputs["logits"], dim=-1)
+            if hasattr(new_carry, "final_actions"):
+                outputs["preds"] = new_carry.final_actions
+            else:
+                outputs["preds"] = torch.argmax(outputs["logits"], dim=-1)
 
             # Correctness
             mask = (labels != IGNORE_LABEL_ID)
