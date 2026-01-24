@@ -79,7 +79,7 @@ load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t
 ### Sudoku-Extreme:
 
 ```bash
-run_name="grpo_mlp_t_sudoku"
+run_name="grpo_AR_mlp_t_sudoku_78"
 python train_rl.py \
 arch=trm_rl \
 data_paths="[data/sudoku-extreme-1k-aug-1000]" \
