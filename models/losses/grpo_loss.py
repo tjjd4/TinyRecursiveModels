@@ -103,7 +103,7 @@ class GRPOLossHead(nn.Module):
 
             rewards = self.reward_fn.compute(
                 seq_is_correct=seq_is_correct,
-                final_steps=new_carry.final_steps,
+                final_steps=new_carry.steps,
                 max_steps=self.model.config.halt_max_steps
             )
 
@@ -120,7 +120,7 @@ class GRPOLossHead(nn.Module):
         ent_loss: torch.Tensor = torch.tensor(0.0, device=device)
         # optional entropy bonus (maximize entropy => subtract negative)
         if self.config.entropy_bonus != 0.0:
-            ent_loss: torch.Tensor = -self.config.entropy_bonus * (new_carry.total_entropy / new_carry.final_steps.clamp_min(1)).mean()
+            ent_loss: torch.Tensor = -self.config.entropy_bonus * (new_carry.total_entropy / new_carry.steps.clamp_min(1)).mean()
         
         grpo_loss: torch.Tensor = (pg_loss + ent_loss) / float(G)
 
