@@ -55,7 +55,13 @@ class EvalConfig(pydantic.BaseModel):
     # Evaluators
     evaluators: List[EvaluatorConfig] = []
     # Hyperparams
-    global_batch_size: int = 1
+    global_batch_size: int
+
+    # Names
+    project_name: Optional[str] = None
+    run_name: Optional[str] = None
+    load_checkpoint: Optional[str] = None
+    checkpoint_path: Optional[str] = None
 
     # Extras
     seed: int = 0

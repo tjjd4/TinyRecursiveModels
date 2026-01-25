@@ -62,7 +62,15 @@ class TinyRecursiveReasoningModel_ACTV2(TinyRecursiveReasoningModel_ACTV1):
 
         new_steps = torch.where(carry.halted.all(), 0, carry.steps)
 
-        new_current_data = {k: torch.where(carry.halted.view((-1, ) + (1, ) * (batch[k].ndim - 1)), batch[k], v) for k, v in carry.current_data.items()}
+        """
+        for streaming training
+        """
+        # new_current_data = {k: torch.where(carry.halted.view((-1, ) + (1, ) * (batch[k].ndim - 1)), batch[k], v) for k, v in carry.current_data.items()}
+        
+        """
+        batch training (no streaming)
+        """
+        new_current_data = {k: v.clone() for k, v in batch.items()}
 
         # Forward inner model
         new_inner_carry, logits, (q_halt_logits, q_continue_logits) = self.inner(carry.inner_carry, new_current_data)
@@ -78,7 +86,7 @@ class TinyRecursiveReasoningModel_ACTV2(TinyRecursiveReasoningModel_ACTV1):
             new_steps = torch.where(carry.halted, new_steps, new_steps + 1)
             is_last_step = new_steps >= self.config.halt_max_steps
 
-            halted = carry.halted | is_last_step
+            halted = is_last_step
 
             if self.config.no_ACT_continue:
                 halted = halted | (q_halt_logits > 0)
@@ -100,12 +108,16 @@ class TinyRecursiveReasoningModel_ACTV2(TinyRecursiveReasoningModel_ACTV1):
                     _, _, (next_q_halt_logits, next_q_continue_logits), _, _ = self.inner(new_inner_carry, new_current_data)
                     outputs["target_q_continue"] = torch.sigmoid(torch.where(is_last_step, next_q_halt_logits, torch.maximum(next_q_halt_logits, next_q_continue_logits)))
 
-            new_final_actions = torch.where(halted, torch.argmax(logits, dim=-1), carry.final_actions)
+            new_halted = carry.halted | halted
+            just_halted = new_halted & (~carry.halted)
+            just_halted_mask = just_halted.unsqueeze(-1)
+            
+            new_final_actions = torch.where(just_halted_mask, torch.argmax(logits, dim=-1), carry.final_actions)
 
         return TinyRecursiveReasoningModel_ACTV2Carry(
             inner_carry=new_inner_carry,
             steps=new_steps,
-            halted=halted,
+            halted=new_halted,
             current_data=new_current_data,
             final_actions=new_final_actions
         ), outputs

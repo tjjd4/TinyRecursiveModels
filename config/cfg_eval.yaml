@@ -21,7 +21,7 @@ evaluators:
   - name: arc@ARC
 
 # Hyperparams - Training
-global_batch_size: 768
+global_batch_size: 32
 
 # Inference parameters
 seed: 0
