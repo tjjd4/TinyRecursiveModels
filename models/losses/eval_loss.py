@@ -32,12 +32,17 @@ class EvalLossHead(nn.Module):
             else:
                 outputs["preds"] = torch.argmax(outputs["logits"], dim=-1)
 
+            if hasattr(new_carry, "final_halt_actions"):
+                outputs["q_halt_preds"] = new_carry.final_halt_actions
+            else:
+                outputs["q_halt_preds"] = (outputs["halt_logits"] >= 0).long()
+
             # Correctness
             mask = (labels != IGNORE_LABEL_ID)
             loss_counts = mask.sum(-1)
             loss_divisor = loss_counts.clamp_min(1).unsqueeze(-1)  # Avoid NaNs in division
 
-            is_correct = mask & (torch.argmax(outputs["logits"], dim=-1) == labels)
+            is_correct = mask & (outputs["preds"] == labels)
             seq_is_correct = is_correct.sum(-1) == loss_counts
             
             # Metrics (halted)
@@ -48,7 +53,7 @@ class EvalLossHead(nn.Module):
                 "accuracy":       torch.where(valid_metrics, (is_correct.to(torch.float32) / loss_divisor).sum(-1), 0).sum(),
                 "exact_accuracy": (valid_metrics & seq_is_correct).sum(),
 
-                "q_halt_accuracy": (valid_metrics & ((outputs["q_halt_logits"] >= 0) == seq_is_correct)).sum(),
+                "q_halt_accuracy": (valid_metrics & (outputs["q_halt_preds"] == seq_is_correct)).sum(),
                 "steps":          torch.where(valid_metrics, new_carry.steps, 0).sum(),
             }
 

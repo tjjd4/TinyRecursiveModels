@@ -20,6 +20,7 @@ class TinyRecursiveReasoningModel_ACTV2Carry:
     current_data: Dict[str, torch.Tensor]
 
     final_actions: Optional[torch.Tensor]
+    final_halt_actions: Optional[torch.Tensor]
 
 class TinyRecursiveReasoningModel_ACTV2(TinyRecursiveReasoningModel_ACTV1):
     def initial_carry(self, batch: Dict[str, torch.Tensor]) -> TinyRecursiveReasoningModel_ACTV2Carry:
@@ -35,6 +36,7 @@ class TinyRecursiveReasoningModel_ACTV2(TinyRecursiveReasoningModel_ACTV1):
             current_data={k: torch.empty_like(v) for k, v in batch.items()},
 
             final_actions=torch.zeros_like(batch["inputs"], dtype=torch.long),
+            final_halt_actions=torch.zeros(batch_size, dtype=torch.long, device=device),
         )
 
     def reset_carry(self, reset_flag: torch.Tensor, carry: TinyRecursiveReasoningModel_ACTV2Carry):
@@ -47,6 +49,7 @@ class TinyRecursiveReasoningModel_ACTV2(TinyRecursiveReasoningModel_ACTV1):
             current_data={k: torch.empty_like(v) for k, v in carry.current_data.items()},
 
             final_actions=torch.zeros_like(carry.final_actions),
+            final_halt_actions=torch.zeros_like(carry.final_halt_actions),
         )
 
     def forward(
@@ -113,11 +116,14 @@ class TinyRecursiveReasoningModel_ACTV2(TinyRecursiveReasoningModel_ACTV1):
             just_halted_mask = just_halted.unsqueeze(-1)
             
             new_final_actions = torch.where(just_halted_mask, torch.argmax(logits, dim=-1), carry.final_actions)
+            new_final_halt_actions = torch.where(just_halted_mask, (q_halt_logits >= 0).long(), carry.final_halt_actions)
+
 
         return TinyRecursiveReasoningModel_ACTV2Carry(
             inner_carry=new_inner_carry,
             steps=new_steps,
             halted=new_halted,
             current_data=new_current_data,
-            final_actions=new_final_actions
+            final_actions=new_final_actions,
+            final_halt_actions=new_final_halt_actions,
         ), outputs
