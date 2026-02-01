@@ -137,7 +137,7 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
             just_halted_mask = just_halted.unsqueeze(-1)
             
             new_final_actions = torch.where(just_halted_mask, torch.argmax(logits, dim=-1), carry.final_actions)
-            new_final_halt_actions = torch.where(just_halted_mask, (q_halt_logits >= 0).long(), carry.final_halt_actions)
+            new_final_halt_actions = torch.where(just_halted, (q_halt_logits >= 0).long(), carry.final_halt_actions)
 
         new_carry = TinyRecursiveReasoningModel_GRPOCarry(
             inner_carry=new_inner_carry,

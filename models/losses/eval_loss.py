@@ -35,7 +35,7 @@ class EvalLossHead(nn.Module):
             if hasattr(new_carry, "final_halt_actions"):
                 outputs["q_halt_preds"] = new_carry.final_halt_actions
             else:
-                outputs["q_halt_preds"] = (outputs["halt_logits"] >= 0).long()
+                outputs["q_halt_preds"] = (outputs["q_halt_logits"] >= 0).long()
 
             # Correctness
             mask = (labels != IGNORE_LABEL_ID)
