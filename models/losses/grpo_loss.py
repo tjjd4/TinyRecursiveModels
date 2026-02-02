@@ -64,14 +64,6 @@ class GRPOLossHead(nn.Module):
         batch: Dict[str, torch.Tensor],
         **model_kwargs,
     ) -> Tuple[Any, torch.Tensor, Dict[str, torch.Tensor], Optional[Dict[str, torch.Tensor]], torch.Tensor]:
-        device = batch["inputs"].device
-        N = batch["inputs"].shape[0]  # expanded batch size
-        G = self.config.num_generations
-
-        if N % G != 0:
-            raise ValueError(f"Batch size ({N}) must be divisible by num_generations ({G})")
-
-        B = N // G  # true batch size (before expansion)
 
         new_carry, outputs = self.model(carry=carry, batch=batch, **model_kwargs)
         labels = new_carry.current_data["labels"]
@@ -98,8 +90,17 @@ class GRPOLossHead(nn.Module):
             }
 
             # if not finished yet
-            if not new_carry.halted.all():
+            if not new_carry.halted.all() or not self.training:
                 return new_carry, None, metrics, None, new_carry.halted.all()
+
+            device = batch["inputs"].device
+            N = batch["inputs"].shape[0]  # expanded batch size
+            G = self.config.num_generations
+
+            if N % G != 0:
+                raise ValueError(f"Batch size ({N}) must be divisible by num_generations ({G})")
+
+            B = N // G  # true batch size (before expansion)
 
             rewards = self.reward_fn.compute(
                 seq_is_correct=seq_is_correct,
