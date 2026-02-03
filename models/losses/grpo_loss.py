@@ -91,7 +91,8 @@ class GRPOLossHead(nn.Module):
 
             # if not finished yet
             if not new_carry.halted.all() or not self.training:
-                return new_carry, None, metrics, None, new_carry.halted.all()
+                detached_outputs = {k: outputs[k].detach() for k in return_keys if k in outputs}
+                return new_carry, None, metrics, detached_outputs, new_carry.halted.all()
 
             device = batch["inputs"].device
             N = batch["inputs"].shape[0]  # expanded batch size
