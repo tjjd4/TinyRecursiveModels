@@ -203,9 +203,9 @@ def create_model(config: TrainRLConfig, train_metadata: PuzzleDatasetMetadata, r
             # unfreeze q_head
             for param in model.model.inner.q_head.parameters():
                 param.requires_grad = True
-            with torch.no_grad():
-                model.model.inner.q_head.weight.zero_()
-                model.model.inner.q_head.bias.fill_(-5)
+            # with torch.no_grad():
+            #     model.model.inner.q_head.weight.zero_()
+            #     model.model.inner.q_head.bias.fill_(-5)
             print(" -> Q-Head unfrozen successfully.")
         except AttributeError as e:
             print(f"Error unfreezing Q-Head: {e}")
