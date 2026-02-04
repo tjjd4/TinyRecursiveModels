@@ -60,7 +60,6 @@ class EvalConfig(pydantic.BaseModel):
     # Names
     project_name: Optional[str] = None
     run_name: Optional[str] = None
-    load_checkpoint: Optional[str] = None
     checkpoint_path: Optional[str] = None
 
     # Extras
@@ -250,7 +249,7 @@ def evaluate(
                 if all_finish:
                     break
 
-            if rank == 0:
+            if rank == 0 and progress_bar is not None:
                 # print(f"  Completed inference in {inference_steps} steps")
                 progress_bar.set_description(f"Batch {processed_batches}: {set_name} | Inference steps: {inference_steps}")
 
