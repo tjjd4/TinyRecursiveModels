@@ -5,6 +5,7 @@ import math
 import yaml
 import shutil
 import copy
+import numpy as np
 
 import torch
 import torch.distributed as dist
@@ -454,6 +455,7 @@ def evaluate(
 
         carry = None
         processed_batches = 0
+        all_steps = None
         
         for set_name, batch, global_batch_size in eval_loader:
             processed_batches += 1
@@ -478,8 +480,10 @@ def evaluate(
                 if all_finish:
                     break
 
-            if rank == 0:
-                print(f"  Completed inference in {inference_steps} steps")
+            # Collect per-sample halt steps
+            all_steps = carry.steps.cpu().numpy()  # (batch_size,)
+            # if rank == 0:
+            #     print(f"  Completed inference in {inference_steps} steps")
 
             for collection in (batch, preds):
                 for k, v in collection.items():
@@ -568,6 +572,49 @@ def evaluate(
                 
         if rank == 0:
             print("All evaluators completed!")
+            
+            # Print and log per-sample steps distribution
+            if all_steps is not None:
+                
+                # Compute statistics
+                steps_min = int(all_steps.min())
+                steps_max = int(all_steps.max())
+                steps_mean = float(all_steps.mean())
+                steps_std = float(all_steps.std())
+                steps_p25 = float(np.percentile(all_steps, 25))
+                steps_p50 = float(np.percentile(all_steps, 50))
+                steps_p75 = float(np.percentile(all_steps, 75))
+                steps_p90 = float(np.percentile(all_steps, 90))
+                
+                # Value counts
+                unique, counts = np.unique(all_steps, return_counts=True)
+                step_dist = dict(zip(unique.tolist(), counts.tolist()))
+                
+                # Print to console
+                print(f"\n=== Per-Sample Steps Distribution ===")
+                print(f"  Total samples: {len(all_steps)}")
+                print(f"  Min: {steps_min}, Max: {steps_max}")
+                print(f"  Mean: {steps_mean:.2f}, Std: {steps_std:.2f}")
+                print(f"  Percentiles - 25%: {steps_p25:.0f}, 50%: {steps_p50:.0f}, 75%: {steps_p75:.0f}, 90%: {steps_p90:.0f}")
+                print(f"  Step distribution: {step_dist}")
+                print("======================================\n")
+                
+                # Log to wandb
+                if reduced_metrics is None:
+                    reduced_metrics = {}
+                    
+                # Histogram for distribution visualization
+                reduced_metrics["eval/steps_histogram"] = wandb.Histogram(all_steps)
+                
+                # Summary statistics
+                reduced_metrics["eval/steps_min"] = steps_min
+                reduced_metrics["eval/steps_max"] = steps_max
+                reduced_metrics["eval/steps_mean"] = steps_mean
+                reduced_metrics["eval/steps_std"] = steps_std
+                reduced_metrics["eval/steps_p25"] = steps_p25
+                reduced_metrics["eval/steps_p50"] = steps_p50
+                reduced_metrics["eval/steps_p75"] = steps_p75
+                reduced_metrics["eval/steps_p90"] = steps_p90
 
     return reduced_metrics
 
@@ -693,6 +740,22 @@ def launch(hydra_config: DictConfig):
         print("Setup EMA")
         ema_helper = EMAHelper(mu=config.ema_rate)
         ema_helper.register(train_state.model)
+
+    # Initial evaluation before training
+    if eval_loader is not None:
+        if RANK == 0:
+            print("INITIAL EVALUATE (before training)")
+        train_state.model.eval()
+        metrics = evaluate(config, 
+            train_state, 
+            eval_loader, 
+            eval_metadata, 
+            evaluators,
+            rank=RANK, 
+            world_size=WORLD_SIZE,
+            cpu_group=CPU_PROCESS_GROUP)
+        if RANK == 0 and metrics is not None:
+            wandb.log(metrics, step=0)
 
     # Training loop
     # [Gradient Accumulation] micro step counter for gradient accumulation
