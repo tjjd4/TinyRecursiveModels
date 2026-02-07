@@ -19,6 +19,7 @@ evaluators:
 # Hyperparams - Training
 global_batch_size: 64
 micro_batch_size: 8
+eval_batch_size: 64
 
 epochs: 1000
 eval_interval: 100

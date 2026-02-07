@@ -59,6 +59,7 @@ class TrainRLConfig(pydantic.BaseModel):
     # Hyperparams
     global_batch_size: int
     micro_batch_size: Optional[int] = None  # For gradient accumulation, None means use global_batch_size
+    eval_batch_size: int
     epochs: int
 
     lr: float
@@ -455,7 +456,7 @@ def evaluate(
 
         carry = None
         processed_batches = 0
-        all_steps = None
+        all_steps_list = []  # Accumulate steps from all batches
         
         for set_name, batch, global_batch_size in eval_loader:
             processed_batches += 1
@@ -464,6 +465,7 @@ def evaluate(
             
             # To device
             batch = {k: v.cuda() for k, v in batch.items()}
+            # No expand batch on evaluation
             # expanded_batch = train_state.model.expand_batch(batch, config.arch.loss.num_generations)
 
             with torch.device("cuda"):
@@ -480,8 +482,8 @@ def evaluate(
                 if all_finish:
                     break
 
-            # Collect per-sample halt steps
-            all_steps = carry.steps.cpu().numpy()  # (batch_size,)
+            # Collect per-sample halt steps (accumulate across batches)
+            all_steps_list.append(carry.steps.detach().cpu())  # (batch_size,)
             # if rank == 0:
             #     print(f"  Completed inference in {inference_steps} steps")
 
@@ -544,6 +546,69 @@ def evaluate(
                     count = m.pop("count")
                     reduced_metrics[set_name] = {k: v / count for k, v in m.items()}
 
+        # Gather all_steps across all ranks to rank 0
+        all_steps = None
+        if all_steps_list:
+            all_steps_local = torch.cat(all_steps_list, dim=0).cuda()  # All samples on this rank
+            
+            if world_size > 1:
+                gathered = [torch.zeros_like(all_steps_local) for _ in range(world_size)]
+                dist.all_gather(gathered, all_steps_local)
+                all_steps = torch.cat(gathered, dim=0).cpu().numpy()
+            else:
+                all_steps = all_steps_local.cpu().numpy()
+
+            if rank == 0 and all_steps is not None:
+                
+                # Compute statistics
+                steps_min = int(all_steps.min())
+                steps_max = int(all_steps.max())
+                steps_mean = float(all_steps.mean())
+                steps_std = float(all_steps.std())
+                steps_p25 = float(np.percentile(all_steps, 25))
+                steps_p50 = float(np.percentile(all_steps, 50))
+                steps_p75 = float(np.percentile(all_steps, 75))
+                steps_p90 = float(np.percentile(all_steps, 90))
+                
+                # Value counts
+                unique, counts = np.unique(all_steps, return_counts=True)
+                step_dist = dict(zip(unique.tolist(), counts.tolist()))
+                
+                # Print to console
+                print(f"\n=== Per-Sample Steps Distribution ===")
+                print(f"  Total samples: {len(all_steps)}")
+                print(f"  Min: {steps_min}, Max: {steps_max}")
+                print(f"  Mean: {steps_mean:.2f}, Std: {steps_std:.2f}")
+                print(f"  Percentiles - 25%: {steps_p25:.0f}, 50%: {steps_p50:.0f}, 75%: {steps_p75:.0f}, 90%: {steps_p90:.0f}")
+                print(f"  Step distribution: {step_dist}")
+                print("======================================\n")
+                
+                # Log to wandb
+                if reduced_metrics is None:
+                    reduced_metrics = {}
+                step_dist_table = wandb.Table(
+                    columns=["step", "count"],
+                    data=[[k, v] for k, v in sorted(step_dist.items())]
+                )
+
+                # Histogram for distribution visualization
+                reduced_metrics["eval/step_distribution"] = wandb.plot.bar(
+                    step_dist_table, "step", "count", title="Step Distribution"
+                )
+                
+                # # Summary statistics
+                reduced_metrics["eval/steps_min"] = steps_min
+                reduced_metrics["eval/steps_max"] = steps_max
+                reduced_metrics["eval/steps_mean"] = steps_mean
+                reduced_metrics["eval/steps_std"] = steps_std
+                reduced_metrics["eval/steps_p25"] = steps_p25
+                reduced_metrics["eval/steps_p50"] = steps_p50
+                reduced_metrics["eval/steps_p75"] = steps_p75
+                reduced_metrics["eval/steps_p90"] = steps_p90
+
+
+        
+
         # Run evaluators
         if rank == 0:
             print(f"\nRunning {len(evaluators)} evaluator(s)...")
@@ -572,49 +637,6 @@ def evaluate(
                 
         if rank == 0:
             print("All evaluators completed!")
-            
-            # Print and log per-sample steps distribution
-            if all_steps is not None:
-                
-                # Compute statistics
-                steps_min = int(all_steps.min())
-                steps_max = int(all_steps.max())
-                steps_mean = float(all_steps.mean())
-                steps_std = float(all_steps.std())
-                steps_p25 = float(np.percentile(all_steps, 25))
-                steps_p50 = float(np.percentile(all_steps, 50))
-                steps_p75 = float(np.percentile(all_steps, 75))
-                steps_p90 = float(np.percentile(all_steps, 90))
-                
-                # Value counts
-                unique, counts = np.unique(all_steps, return_counts=True)
-                step_dist = dict(zip(unique.tolist(), counts.tolist()))
-                
-                # Print to console
-                print(f"\n=== Per-Sample Steps Distribution ===")
-                print(f"  Total samples: {len(all_steps)}")
-                print(f"  Min: {steps_min}, Max: {steps_max}")
-                print(f"  Mean: {steps_mean:.2f}, Std: {steps_std:.2f}")
-                print(f"  Percentiles - 25%: {steps_p25:.0f}, 50%: {steps_p50:.0f}, 75%: {steps_p75:.0f}, 90%: {steps_p90:.0f}")
-                print(f"  Step distribution: {step_dist}")
-                print("======================================\n")
-                
-                # Log to wandb
-                if reduced_metrics is None:
-                    reduced_metrics = {}
-                    
-                # Histogram for distribution visualization
-                reduced_metrics["eval/steps_histogram"] = wandb.Histogram(all_steps)
-                
-                # Summary statistics
-                reduced_metrics["eval/steps_min"] = steps_min
-                reduced_metrics["eval/steps_max"] = steps_max
-                reduced_metrics["eval/steps_mean"] = steps_mean
-                reduced_metrics["eval/steps_std"] = steps_std
-                reduced_metrics["eval/steps_p25"] = steps_p25
-                reduced_metrics["eval/steps_p50"] = steps_p50
-                reduced_metrics["eval/steps_p75"] = steps_p75
-                reduced_metrics["eval/steps_p90"] = steps_p90
 
     return reduced_metrics
 
@@ -712,7 +734,7 @@ def launch(hydra_config: DictConfig):
 
     train_loader, train_metadata = create_dataloader(config, "train", test_set_mode=False, epochs_per_iter=train_epochs_per_iter, global_batch_size=BATCH_SIZE, rank=RANK, world_size=WORLD_SIZE)
     try:
-        eval_loader,  eval_metadata  = create_dataloader(config, "test", test_set_mode=True, epochs_per_iter=1, global_batch_size=BATCH_SIZE, rank=RANK, world_size=WORLD_SIZE)
+        eval_loader,  eval_metadata  = create_dataloader(config, "test", test_set_mode=True, epochs_per_iter=1, global_batch_size=config.eval_batch_size, rank=RANK, world_size=WORLD_SIZE)
     except:
         print("NO EVAL DATA FOUND")
         eval_loader = eval_metadata = None
