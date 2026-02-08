@@ -587,13 +587,15 @@ def evaluate(
                 if reduced_metrics is None:
                     reduced_metrics = {}
                 step_dist_table = wandb.Table(
-                    columns=["step", "count"],
-                    data=[[k, v] for k, v in sorted(step_dist.items())]
+                    columns=["eval_step", "step", "count"],
+                    data=[[train_state.step, k, v] for k, v in sorted(step_dist.items())]
                 )
 
-                # Histogram for distribution visualization
-                reduced_metrics["eval/step_distribution"] = wandb.plot.bar(
-                    step_dist_table, "step", "count", title="Step Distribution"
+                reduced_metrics["eval/step_histogram"] = wandb.Histogram(all_steps, num_bins=16)
+
+                # Histogram for distribution visualization (grouped by eval_step)
+                reduced_metrics[f"eval/step_distribution_{train_state.step}"] = wandb.plot.bar(
+                    step_dist_table, "step", "count", title=f"Step Distribution (eval@{train_state.step})"
                 )
                 
                 # # Summary statistics
