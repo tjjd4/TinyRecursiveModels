@@ -106,34 +106,45 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
             halt_logits = q_halt_logits
             halt_dist = torch.distributions.Bernoulli(logits=halt_logits)
 
+        token_dist = torch.distributions.Categorical(logits=logits)
+
         # Training: sample for exploration; Eval: argmax for deterministic prediction
         if self.training:
             halt_action = halt_dist.sample()  # (N,) 0=Cont, 1=Halt
+            token_action = token_dist.sample()  # (N,) 
         else:
             if not self.config.no_ACT_continue:
                 halt_action = halt_logits.argmax(dim=-1)  # (N,) deterministic
             else:
                 halt_action = (halt_logits > 0).long()
+            token_action = token_dist.argmax(dim=-1)  # (N,) deterministic
         
         is_last_step = new_steps >= self.config.halt_max_steps
 
         halt_action = torch.where(is_last_step, torch.ones_like(halt_action), halt_action)
 
         # Mask for sequences that were active before this step
-        step_mask = (~carry.halted).float()
+        active_mask_float = (~carry.halted).float()
+        new_halted = carry.halted | (halt_action == 1)
 
+        # Mask for sequences that were just halted in this step
+        just_halted = new_halted & (~carry.halted)
+        just_halted_mask_float = just_halted.float()
+
+        # halt log prob
         halt_step_logprob = halt_dist.log_prob(halt_action.float())  # (N,)
-        # entropy (optional)
         halt_step_entropy = halt_dist.entropy()  # (N,)
 
+        # token log prob
+        token_step_logprob = token_dist.log_prob(token_action.float()).sum(dim=-1)
+        token_step_entropy = token_dist.entropy().sum(dim=-1)
+
         # Accumulate log_prob and entropy for active sequences
-        # step_mask ensures only accumulate for sequences that haven't halted yet (including the current step)
-        new_total_logprob = carry.total_logprob + halt_step_logprob * step_mask
-        new_total_entropy = carry.total_entropy + halt_step_entropy * step_mask
+        # active_mask ensures only accumulate for sequences that haven't halted yet (including the current step)
+        new_total_logprob = carry.total_logprob + halt_step_logprob * active_mask_float + token_step_logprob * just_halted_mask_float
+        new_total_entropy = carry.total_entropy + halt_step_entropy * active_mask_float + token_step_entropy * just_halted_mask_float
 
         with torch.no_grad():
-            new_halted = carry.halted | (halt_action == 1)
-            just_halted = new_halted & (~carry.halted)
             just_halted_mask = just_halted.unsqueeze(-1)
             
             new_final_actions = torch.where(just_halted_mask, torch.argmax(logits, dim=-1), carry.final_actions)
