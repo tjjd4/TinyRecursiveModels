@@ -117,7 +117,7 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
                 halt_action = halt_logits.argmax(dim=-1)  # (N,) deterministic
             else:
                 halt_action = (halt_logits > 0).long()
-            token_action = token_dist.argmax(dim=-1)  # (N,) deterministic
+            token_action = logits.argmax(dim=-1)  # (N,) deterministic
         
         is_last_step = new_steps >= self.config.halt_max_steps
 
