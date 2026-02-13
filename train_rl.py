@@ -32,7 +32,6 @@ class RewardConfig(pydantic.BaseModel):
 class LossConfig(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra='allow')
     name: str
-    num_generations: int
     reward: RewardConfig
 
 
@@ -73,6 +72,9 @@ class TrainRLConfig(pydantic.BaseModel):
     # Puzzle embedding
     puzzle_emb_lr: float
     puzzle_emb_weight_decay: float
+
+    # Hyperparams - GRPO
+    num_generations: int
 
     # Names
     project_name: Optional[str] = None
@@ -131,7 +133,7 @@ def create_model(config: TrainRLConfig, train_metadata: PuzzleDatasetMetadata, r
     model_cfg = dict(
         **config.arch.__pydantic_extra__,  # type: ignore
         # [Gradient Accumulation] use micro_batch_size if provided, else use global_batch_size
-        batch_size=(config.micro_batch_size if config.micro_batch_size is not None else config.global_batch_size) * config.arch.loss.num_generations // world_size,
+        batch_size=(config.micro_batch_size if config.micro_batch_size is not None else config.global_batch_size) * config.num_generations // world_size,
         vocab_size=train_metadata.vocab_size,
         seq_len=train_metadata.seq_len,
         num_puzzle_identifiers=train_metadata.num_puzzle_identifiers,
@@ -140,7 +142,7 @@ def create_model(config: TrainRLConfig, train_metadata: PuzzleDatasetMetadata, r
 
     loss_cfg = dict(
         **config.arch.loss.__pydantic_extra__,
-        num_generations=config.arch.loss.num_generations,
+        num_generations=config.num_generations,
         reward=dict(
             **config.arch.loss.reward.__pydantic_extra__,
             name=config.arch.loss.reward.name,
@@ -349,7 +351,7 @@ def train_batch(config: TrainRLConfig, train_state: TrainState, batch: Any, glob
     # To device
     batch = {k: v.cuda() for k, v in batch.items()}
 
-    expanded_batch = train_state.model.expand_batch(batch, config.arch.loss.num_generations)
+    expanded_batch = train_state.model.expand_batch(batch, config.num_generations)
 
     # Init carry if it is None
     if train_state.carry is None:
@@ -466,7 +468,7 @@ def evaluate(
             # To device
             batch = {k: v.cuda() for k, v in batch.items()}
             # No expand batch on evaluation
-            # expanded_batch = train_state.model.expand_batch(batch, config.arch.loss.num_generations)
+            # expanded_batch = train_state.model.expand_batch(batch, config.num_generations)
 
             with torch.device("cuda"):
                 carry = train_state.model.initial_carry(batch)  # type: ignore
