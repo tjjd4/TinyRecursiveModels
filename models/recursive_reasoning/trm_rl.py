@@ -132,11 +132,11 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
         just_halted_mask_float = just_halted.float()
 
         # halt log prob
-        halt_step_logprob = halt_dist.log_prob(halt_action.float())  # (N,)
+        halt_step_logprob = halt_dist.log_prob(halt_action.long())  # (N,)
         halt_step_entropy = halt_dist.entropy()  # (N,)
 
         # token log prob
-        token_step_logprob = token_dist.log_prob(token_action.float()).sum(dim=-1)
+        token_step_logprob = token_dist.log_prob(token_action.long()).sum(dim=-1)
         token_step_entropy = token_dist.entropy().sum(dim=-1)
 
         # Accumulate log_prob and entropy for active sequences
@@ -147,7 +147,7 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
         with torch.no_grad():
             just_halted_mask = just_halted.unsqueeze(-1)
             
-            new_final_actions = torch.where(just_halted_mask, torch.argmax(logits, dim=-1), carry.final_actions)
+            new_final_actions = torch.where(just_halted_mask, token_action, carry.final_actions)
             new_final_halt_actions = torch.where(just_halted, (q_halt_logits >= 0).long(), carry.final_halt_actions)
 
         new_carry = TinyRecursiveReasoningModel_GRPOCarry(
