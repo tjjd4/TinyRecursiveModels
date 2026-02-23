@@ -1,4 +1,5 @@
 from typing import Any, Tuple, Dict, Sequence, Optional
+import copy
 
 import pydantic
 import torch
@@ -15,6 +16,7 @@ class RewardConfig(pydantic.BaseModel):
 class GRPOLossConfig(pydantic.BaseModel):
     num_generations: int
     entropy_bonus: float
+    kl_beta: float
     reward: RewardConfig
 
 class GRPOLossHead(nn.Module):
@@ -34,8 +36,22 @@ class GRPOLossHead(nn.Module):
         reward_cls = load_model_class(self.config.reward.name)
         self.reward_fn = reward_cls(reward_cfg)
 
+        # Frozen reference model for KL divergence
+        if hasattr(self.config, "kl_beta") and self.config.kl_beta > 0.0:
+            self.ref_model = copy.deepcopy(model)
+            for p in self.ref_model.parameters():
+                p.requires_grad = False
+            self.ref_model.eval()
+        else:
+            self.ref_model = None
+
     def initial_carry(self, *args, **kwargs):
-        return self.model.initial_carry(*args, **kwargs)  # type: ignore
+        carry = self.model.initial_carry(*args, **kwargs)  # type: ignore
+        if self.ref_model is not None:
+            batch = args[0]
+            batch_size = batch["inputs"].shape[0]
+            carry.ref_inner_carry = self.ref_model.inner.empty_carry(batch_size)
+        return carry
 
     # expand batch before forwarding
     @staticmethod
@@ -67,6 +83,41 @@ class GRPOLossHead(nn.Module):
 
         new_carry, outputs = self.model(carry=carry, batch=batch, **model_kwargs)
         labels = new_carry.current_data["labels"]
+
+        if self.training and self.ref_model is not None:
+            with torch.no_grad():
+                sampled_halt_action = outputs["sampled_halt_action"]
+                sampled_token_action = outputs["sampled_token_action"]
+
+                new_ref_inner_carry, ref_logits, (ref_q_halt, ref_q_cont) = self.ref_model.inner(carry.ref_inner_carry, batch, **model_kwargs)
+
+                if not self.model.config.no_ACT_continue:
+                    ref_halt_logits = torch.stack([ref_q_cont, ref_q_halt], dim=-1)
+                    ref_halt_logits = torch.nan_to_num(ref_halt_logits, nan=0.0)
+                    ref_halt_dist = torch.distributions.Categorical(logits=ref_halt_logits)
+                else:
+                    ref_halt_logits = ref_q_halt
+                    ref_halt_dist = torch.distributions.Bernoulli(logits=ref_halt_logits)
+
+                ref_token_dist = torch.distributions.Categorical(logits=ref_logits)
+
+                ref_halt_logprob = ref_halt_dist.log_prob(sampled_halt_action.long())  # (N,)
+                ref_token_logprob = ref_token_dist.log_prob(sampled_token_action.long()).sum(dim=-1)  # (N,)
+
+            step_halt_logprob = outputs["step_halt_logprob"]  # (N,)
+            step_token_logprob = outputs["step_token_logprob"]  # (N,)
+
+            step_halt_kl = step_halt_logprob - ref_halt_logprob
+            step_token_kl = step_token_logprob - ref_token_logprob
+
+            active_mask_float = (~carry.halted).float()
+            just_halted_mask_float = (new_carry.halted & ~carry.halted).float()
+
+            step_total_kl = step_halt_kl * active_mask_float + step_token_kl * just_halted_mask_float
+
+            # Save ref_inner_carry and accumulate step_kls
+            new_carry.ref_inner_carry = new_ref_inner_carry
+            new_carry.step_kls = carry.step_kls + [step_total_kl]
 
         with torch.no_grad():
             # Correctness
@@ -123,13 +174,21 @@ class GRPOLossHead(nn.Module):
         # optional entropy bonus (maximize entropy => subtract negative)
         if self.config.entropy_bonus != 0.0:
             ent_loss: torch.Tensor = -self.config.entropy_bonus * (new_carry.total_entropy / new_carry.steps.clamp_min(1)).mean()
-        
-        grpo_loss: torch.Tensor = (pg_loss + ent_loss) / float(G)
+
+        # KL divergence loss: sum across all recursive steps
+        kl_loss: torch.Tensor = torch.tensor(0.0, device=device)
+        if new_carry.step_kls:
+            all_steps_kl = torch.stack(new_carry.step_kls, dim=0)
+            total_kl_per_seq = all_steps_kl.sum(dim=0)
+            kl_loss = self.config.kl_beta * total_kl_per_seq.sum()
+
+        grpo_loss: torch.Tensor = (pg_loss + ent_loss + kl_loss) / float(G)
 
         metrics.update({
             "grpo_loss": grpo_loss.detach(),
             "pg_loss": pg_loss.detach(),
             "ent_loss": ent_loss.detach(),
+            "kl_loss": kl_loss.detach(),
             "reward": rewards.sum(),
         })
 
