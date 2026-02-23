@@ -47,4 +47,4 @@ num_generations: 4
 ema: False # use Exponential-Moving-Average
 ema_rate: 0.999 # EMA-rate
 freeze_weights: False # If True, freeze weights and only learn the embeddings
-freeze_backbone: True # If True, freeze backbone (puzzle embeddings and model weights without q_head)
+freeze_backbone: False # If True, freeze backbone (puzzle embeddings and model weights without q_head)

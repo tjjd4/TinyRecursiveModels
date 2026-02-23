@@ -36,14 +36,16 @@ class GRPOLossHead(nn.Module):
         reward_cls = load_model_class(self.config.reward.name)
         self.reward_fn = reward_cls(reward_cfg)
 
-        # Frozen reference model for KL divergence
+        # ref_model will be initialized after checkpoint loading via init_ref_model()
+        self.ref_model = None
+
+    def init_ref_model(self):
         if hasattr(self.config, "kl_beta") and self.config.kl_beta > 0.0:
-            self.ref_model = copy.deepcopy(model)
+            self.ref_model = copy.deepcopy(self.model)
             for p in self.ref_model.parameters():
                 p.requires_grad = False
             self.ref_model.eval()
-        else:
-            self.ref_model = None
+            print(" -> ref_model created (frozen copy of loaded model).")
 
     def initial_carry(self, *args, **kwargs):
         carry = self.model.initial_carry(*args, **kwargs)  # type: ignore
@@ -101,7 +103,7 @@ class GRPOLossHead(nn.Module):
 
                 ref_token_dist = torch.distributions.Categorical(logits=ref_logits)
 
-                ref_halt_logprob = ref_halt_dist.log_prob(sampled_halt_action.long())  # (N,)
+                ref_halt_logprob = ref_halt_dist.log_prob(sampled_halt_action.float())  # (N,)
                 ref_token_logprob = ref_token_dist.log_prob(sampled_token_action.long()).sum(dim=-1)  # (N,)
 
             step_halt_logprob = outputs["step_halt_logprob"]  # (N,)
@@ -117,7 +119,7 @@ class GRPOLossHead(nn.Module):
 
             # Save ref_inner_carry and accumulate step_kls
             new_carry.ref_inner_carry = new_ref_inner_carry
-            new_carry.step_kls = carry.step_kls + [step_total_kl]
+            new_carry.total_kl = new_carry.total_kl + step_total_kl
 
         with torch.no_grad():
             # Correctness
@@ -176,11 +178,7 @@ class GRPOLossHead(nn.Module):
             ent_loss: torch.Tensor = -self.config.entropy_bonus * (new_carry.total_entropy / new_carry.steps.clamp_min(1)).mean()
 
         # KL divergence loss: sum across all recursive steps
-        kl_loss: torch.Tensor = torch.tensor(0.0, device=device)
-        if new_carry.step_kls:
-            all_steps_kl = torch.stack(new_carry.step_kls, dim=0)
-            total_kl_per_seq = all_steps_kl.sum(dim=0)
-            kl_loss = self.config.kl_beta * total_kl_per_seq.sum()
+        kl_loss: torch.Tensor = self.config.kl_beta * new_carry.total_kl.sum()
 
         grpo_loss: torch.Tensor = (pg_loss + ent_loss + kl_loss) / float(G)
 

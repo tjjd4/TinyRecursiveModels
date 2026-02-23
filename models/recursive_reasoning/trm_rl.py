@@ -22,7 +22,7 @@ class TinyRecursiveReasoningModel_GRPOCarry:
     final_halt_actions: torch.Tensor    # (N, L)
 
     ref_inner_carry: TinyRecursiveReasoningModel_ACTV1InnerCarry
-    step_kls: list[torch.Tensor]
+    total_kl: torch.Tensor
 
     current_data: Dict[str, torch.Tensor]
 
@@ -44,7 +44,7 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
             final_halt_actions=torch.zeros(batch_size, dtype=torch.long, device=device),
 
             ref_inner_carry=None,
-            step_kls=[],
+            total_kl=torch.zeros(batch_size, device=device),
 
             current_data={k: torch.empty_like(v) for k, v in batch.items()},
         )
@@ -64,7 +64,7 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
             final_actions=torch.zeros_like(carry.final_actions),
             final_halt_actions=torch.zeros_like(carry.final_halt_actions),
             ref_inner_carry=new_ref_inner_carry,
-            step_kls=[],
+            total_kl=torch.zeros_like(carry.total_kl),
             current_data={k: torch.empty_like(v) for k, v in carry.current_data.items()},
         )
 
@@ -143,7 +143,7 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
         just_halted_mask_float = just_halted.float()
 
         # halt log prob
-        step_halt_logprob = halt_dist.log_prob(halt_action.long())  # (N,)
+        step_halt_logprob = halt_dist.log_prob(halt_action.float())  # (N,)
         step_halt_entropy = halt_dist.entropy()  # (N,)
 
         # token log prob
@@ -178,7 +178,7 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
             final_actions=new_final_actions,
             final_halt_actions=new_final_halt_actions,
             ref_inner_carry=carry.ref_inner_carry,
-            step_kls=carry.step_kls,
+            total_kl=carry.total_kl,
         )
 
         return new_carry, outputs

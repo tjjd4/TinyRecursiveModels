@@ -171,6 +171,9 @@ def create_model(config: TrainRLConfig, train_metadata: PuzzleDatasetMetadata, r
                 for param in list(model.parameters()) + list(model.buffers()):
                     dist.broadcast(param, src=0)
 
+    # Create frozen ref_model AFTER checkpoint is loaded (so deepcopy gets correct weights)
+    model.init_ref_model()
+
     # Optimizers and lr
     if config.arch.puzzle_emb_ndim == 0:
         optimizers = [
@@ -767,21 +770,21 @@ def launch(hydra_config: DictConfig):
         ema_helper = EMAHelper(mu=config.ema_rate)
         ema_helper.register(train_state.model)
 
-    # Initial evaluation before training
-    if eval_loader is not None:
-        if RANK == 0:
-            print("INITIAL EVALUATE (before training)")
-        train_state.model.eval()
-        metrics = evaluate(config, 
-            train_state, 
-            eval_loader, 
-            eval_metadata, 
-            evaluators,
-            rank=RANK, 
-            world_size=WORLD_SIZE,
-            cpu_group=CPU_PROCESS_GROUP)
-        if RANK == 0 and metrics is not None:
-            wandb.log(metrics, step=0)
+    # # Initial evaluation before training
+    # if eval_loader is not None:
+    #     if RANK == 0:
+    #         print("INITIAL EVALUATE (before training)")
+    #     train_state.model.eval()
+    #     metrics = evaluate(config, 
+    #         train_state, 
+    #         eval_loader, 
+    #         eval_metadata, 
+    #         evaluators,
+    #         rank=RANK, 
+    #         world_size=WORLD_SIZE,
+    #         cpu_group=CPU_PROCESS_GROUP)
+    #     if RANK == 0 and metrics is not None:
+    #         wandb.log(metrics, step=0)
 
     # Training loop
     # [Gradient Accumulation] micro step counter for gradient accumulation
