@@ -2,7 +2,7 @@ name: recursive_reasoning.trm_rl@TinyRecursiveReasoningModel_RL
 loss:
   name: losses.grpo_loss@GRPOLossHead
   entropy_bonus: 0.005
-  kl_beta: 0.00001
+  kl_beta: 0.02
   reward:
     name: losses.rewards.adaptive_reward@AdaptiveReward
     num_generations: ${num_generations}

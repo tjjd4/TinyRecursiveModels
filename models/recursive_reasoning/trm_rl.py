@@ -21,7 +21,6 @@ class TinyRecursiveReasoningModel_GRPOCarry:
     final_actions: torch.Tensor    # (N, L)
     final_halt_actions: torch.Tensor    # (N, L)
 
-    ref_inner_carry: TinyRecursiveReasoningModel_ACTV1InnerCarry
     total_kl: torch.Tensor
 
     current_data: Dict[str, torch.Tensor]
@@ -43,7 +42,6 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
             final_actions=torch.zeros_like(batch["inputs"], dtype=torch.long),
             final_halt_actions=torch.zeros(batch_size, dtype=torch.long, device=device),
 
-            ref_inner_carry=None,
             total_kl=torch.zeros(batch_size, device=device),
 
             current_data={k: torch.empty_like(v) for k, v in batch.items()},
@@ -52,9 +50,6 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
     def reset_carry(self, reset_flag: torch.Tensor, carry: TinyRecursiveReasoningModel_GRPOCarry):
         # Update data, carry (removing halted sequences)
         new_inner_carry = self.inner.reset_carry(reset_flag, carry.inner_carry)
-        new_ref_inner_carry = None
-        if carry.ref_inner_carry is not None:
-            new_ref_inner_carry = self.inner.reset_carry(reset_flag, carry.ref_inner_carry)
         return TinyRecursiveReasoningModel_GRPOCarry(
             inner_carry=new_inner_carry,
             steps=torch.zeros_like(carry.steps),
@@ -63,7 +58,6 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
             total_entropy=torch.zeros_like(carry.total_entropy),
             final_actions=torch.zeros_like(carry.final_actions),
             final_halt_actions=torch.zeros_like(carry.final_halt_actions),
-            ref_inner_carry=new_ref_inner_carry,
             total_kl=torch.zeros_like(carry.total_kl),
             current_data={k: torch.empty_like(v) for k, v in carry.current_data.items()},
         )
@@ -117,12 +111,11 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
             halt_logits = q_halt_logits
             halt_dist = torch.distributions.Bernoulli(logits=halt_logits)
 
-        token_dist = torch.distributions.Categorical(logits=logits)
 
         # Training: sample for exploration; Eval: argmax for deterministic prediction
         if self.training:
             halt_action = halt_dist.sample()  # (N,) 0=Cont, 1=Halt
-            token_action = token_dist.sample()  # (N, L)
+            token_action = torch.distributions.Categorical(logits=logits).sample()  # (N, L)
         else:
             if not self.config.no_ACT_continue:
                 halt_action = halt_logits.argmax(dim=-1)  # (N,) deterministic
@@ -142,18 +135,6 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
         just_halted = new_halted & (~carry.halted)
         just_halted_mask_float = just_halted.float()
 
-        # halt log prob
-        step_halt_logprob = halt_dist.log_prob(halt_action.float())  # (N,)
-        step_halt_entropy = halt_dist.entropy()  # (N,)
-
-        # token log prob
-        step_token_logprob = token_dist.log_prob(token_action.long()).sum(dim=-1)  # (N,)
-        step_token_entropy = token_dist.entropy().sum(dim=-1)  # (N,)
-
-        # Accumulate log_prob and entropy for active sequences
-        # active_mask ensures only accumulate for sequences that haven't halted yet (including the current step)
-        new_total_logprob = carry.total_logprob + step_halt_logprob * active_mask_float + step_token_logprob * just_halted_mask_float
-        new_total_entropy = carry.total_entropy + step_halt_entropy * active_mask_float + step_token_entropy * just_halted_mask_float
 
         with torch.no_grad():
             just_halted_mask = just_halted.unsqueeze(-1)
@@ -164,8 +145,6 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
             outputs.update({
                 "sampled_halt_action": halt_action,
                 "sampled_token_action": token_action,
-                "step_halt_logprob": step_halt_logprob,
-                "step_token_logprob": step_token_logprob,
             })
 
         new_carry = TinyRecursiveReasoningModel_GRPOCarry(
@@ -173,11 +152,10 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
             steps=new_steps,
             halted=new_halted,
             current_data=new_current_data,
-            total_logprob=new_total_logprob,
-            total_entropy=new_total_entropy,
+            total_logprob=carry.total_logprob,
+            total_entropy=carry.total_entropy,
             final_actions=new_final_actions,
             final_halt_actions=new_final_halt_actions,
-            ref_inner_carry=carry.ref_inner_carry,
             total_kl=carry.total_kl,
         )
 

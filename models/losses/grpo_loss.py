@@ -48,12 +48,7 @@ class GRPOLossHead(nn.Module):
             print(" -> ref_model created (frozen copy of loaded model).")
 
     def initial_carry(self, *args, **kwargs):
-        carry = self.model.initial_carry(*args, **kwargs)  # type: ignore
-        if self.ref_model is not None:
-            batch = args[0]
-            batch_size = batch["inputs"].shape[0]
-            carry.ref_inner_carry = self.ref_model.inner.empty_carry(batch_size)
-        return carry
+        return self.model.initial_carry(*args, **kwargs)  # type: ignore
 
     # expand batch before forwarding
     @staticmethod
@@ -85,45 +80,70 @@ class GRPOLossHead(nn.Module):
 
         new_carry, outputs = self.model(carry=carry, batch=batch, **model_kwargs)
         labels = new_carry.current_data["labels"]
+        mask = (labels != IGNORE_LABEL_ID)
 
-        if self.training and self.ref_model is not None:
-            with torch.no_grad():
-                sampled_halt_action = outputs["sampled_halt_action"]
-                sampled_token_action = outputs["sampled_token_action"]
+        # Compute logprob and entropy then accumulate into carry (only training)
+        if self.training:
+            sampled_halt_action = outputs["sampled_halt_action"]
+            sampled_token_action = outputs["sampled_token_action"]
 
-                new_ref_inner_carry, ref_logits, (ref_q_halt, ref_q_cont) = self.ref_model.inner(carry.ref_inner_carry, batch, **model_kwargs)
+            # Rebuild distributions from logits
+            if not self.model.config.no_ACT_continue:
+                halt_logits = torch.stack([outputs["q_continue_logits"], outputs["q_halt_logits"]], dim=-1)
+                halt_logits = torch.nan_to_num(halt_logits, nan=0.0)
+                halt_dist = torch.distributions.Categorical(logits=halt_logits)
+            else:
+                halt_dist = torch.distributions.Bernoulli(logits=outputs["q_halt_logits"])
 
-                if not self.model.config.no_ACT_continue:
-                    ref_halt_logits = torch.stack([ref_q_cont, ref_q_halt], dim=-1)
-                    ref_halt_logits = torch.nan_to_num(ref_halt_logits, nan=0.0)
-                    ref_halt_dist = torch.distributions.Categorical(logits=ref_halt_logits)
-                else:
-                    ref_halt_logits = ref_q_halt
-                    ref_halt_dist = torch.distributions.Bernoulli(logits=ref_halt_logits)
+            token_dist = torch.distributions.Categorical(logits=outputs["logits"])
 
-                ref_token_dist = torch.distributions.Categorical(logits=ref_logits)
+            # Halt log_prob / entropy
+            step_halt_logprob = halt_dist.log_prob(sampled_halt_action.float())  # (N,)
+            step_halt_entropy = halt_dist.entropy()  # (N,)
 
-                ref_halt_logprob = ref_halt_dist.log_prob(sampled_halt_action.float())  # (N,)
-                ref_token_logprob = ref_token_dist.log_prob(sampled_token_action.long()).sum(dim=-1)  # (N,)
+            # Token log_prob / entropy (only valid positions)
+            step_token_logprob = (token_dist.log_prob(sampled_token_action.long()) * mask).sum(dim=-1)  # (N,)
+            step_token_entropy = (token_dist.entropy() * mask).sum(dim=-1)  # (N,)
 
-            step_halt_logprob = outputs["step_halt_logprob"]  # (N,)
-            step_token_logprob = outputs["step_token_logprob"]  # (N,)
-
-            step_halt_kl = step_halt_logprob - ref_halt_logprob
-            step_token_kl = step_token_logprob - ref_token_logprob
-
+            # Masks for accumulation
             active_mask_float = (~carry.halted).float()
             just_halted_mask_float = (new_carry.halted & ~carry.halted).float()
 
-            step_total_kl = step_halt_kl * active_mask_float + step_token_kl * just_halted_mask_float
+            # Accumulate logprob and entropy into carry
+            new_carry.total_logprob = new_carry.total_logprob + step_halt_logprob * active_mask_float + step_token_logprob * just_halted_mask_float
+            new_carry.total_entropy = new_carry.total_entropy + step_halt_entropy * active_mask_float + step_token_entropy * just_halted_mask_float
 
-            # Save ref_inner_carry and accumulate step_kls
-            new_carry.ref_inner_carry = new_ref_inner_carry
-            new_carry.total_kl = new_carry.total_kl + step_total_kl
+            # --- KL divergence against ref_model ---
+            if self.ref_model is not None:
+                with torch.no_grad():
+                    num_tokens = mask.sum(-1).clamp_min(1)
+
+                    _, ref_logits, (ref_q_halt, ref_q_cont) = self.ref_model.inner(carry.inner_carry, batch, **model_kwargs)
+
+                    if not self.model.config.no_ACT_continue:
+                        ref_halt_logits = torch.stack([ref_q_cont, ref_q_halt], dim=-1)
+                        ref_halt_logits = torch.nan_to_num(ref_halt_logits, nan=0.0)
+                        ref_halt_dist = torch.distributions.Categorical(logits=ref_halt_logits)
+                    else:
+                        ref_halt_logits = ref_q_halt
+                        ref_halt_dist = torch.distributions.Bernoulli(logits=ref_halt_logits)
+
+                    ref_token_dist = torch.distributions.Categorical(logits=ref_logits)
+
+                    ref_halt_logprob = ref_halt_dist.log_prob(sampled_halt_action.float())  # (N,)
+                    ref_token_logprob = (ref_token_dist.log_prob(sampled_token_action.long()) * mask).sum(dim=-1)  # (N,)
+
+                step_halt_kl = step_halt_logprob - ref_halt_logprob
+                # divide by num_tokens to normalize
+                step_token_kl = (step_token_logprob - ref_token_logprob) / num_tokens
+
+                step_total_kl = step_halt_kl * active_mask_float + step_token_kl * just_halted_mask_float
+
+                # Accumulate KL into carry
+                new_carry.total_kl = new_carry.total_kl + step_total_kl
 
         with torch.no_grad():
             # Correctness
-            mask = (labels != IGNORE_LABEL_ID)
             loss_counts = mask.sum(-1)
             loss_divisor = loss_counts.clamp_min(1).unsqueeze(-1)
 
@@ -175,7 +195,7 @@ class GRPOLossHead(nn.Module):
         ent_loss: torch.Tensor = torch.tensor(0.0, device=device)
         # optional entropy bonus (maximize entropy => subtract negative)
         if self.config.entropy_bonus != 0.0:
-            ent_loss: torch.Tensor = -self.config.entropy_bonus * (new_carry.total_entropy / new_carry.steps.clamp_min(1)).mean()
+            ent_loss: torch.Tensor = -self.config.entropy_bonus * (new_carry.total_entropy / new_carry.steps.clamp_min(1)).sum()
 
         # KL divergence loss: sum across all recursive steps
         kl_loss: torch.Tensor = self.config.kl_beta * new_carry.total_kl.sum()
