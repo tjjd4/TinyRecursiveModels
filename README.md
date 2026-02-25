@@ -95,13 +95,13 @@ load_checkpoint="checkpoints/Maze-30x30-hard-1k-ACT-torch/pretrain_att_maze30x30
 ### Sudoku-Extreme:
 
 ```bash
-run_name="grpo_AR_mlp_t_sudoku_78"
+run_name="grpo_AR_mlp_t_sudoku_KL"
 python train_rl.py \
 arch=trm_rl \
 data_paths="[data/sudoku-extreme-1k-aug-1000]" \
 evaluators="[]" \
 epochs=500 eval_interval=50 \
-lr=1e-4 puzzle_emb_lr=1e-4 weight_decay=1.0 puzzle_emb_weight_decay=1.0 \
+lr=1e-6 puzzle_emb_lr=1e-4 weight_decay=1.0 puzzle_emb_weight_decay=1.0 \
 arch.mlp_t=True arch.pos_encodings=none \
 arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=6 \
@@ -112,13 +112,13 @@ load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t
 ### Maze-Hard:
 
 ```bash
-run_name="grpo_AR_att_maze30x30_1gpu_44"
+run_name="grpo_AR_att_maze30x30_1gpu_KL"
 python train_rl.py \
 arch=trm_rl \
 data_paths="[data/maze-30x30-hard-1k]" \
 evaluators="[]" \
 epochs=500 eval_interval=50 \
-lr=1e-4 puzzle_emb_lr=1e-4 weight_decay=1.0 puzzle_emb_weight_decay=1.0 \
+lr=1e-6 puzzle_emb_lr=1e-4 weight_decay=1.0 puzzle_emb_weight_decay=1.0 \
 arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=4 \
 load_checkpoint="checkpoints/Maze-30x30-hard-1k-ACT-torch/pretrain_att_maze30x30_1gpu_44/step_65104" \
