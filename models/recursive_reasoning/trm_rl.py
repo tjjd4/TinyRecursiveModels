@@ -115,7 +115,8 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
         # Training: sample for exploration; Eval: argmax for deterministic prediction
         if self.training:
             halt_action = halt_dist.sample()  # (N,) 0=Cont, 1=Halt
-            token_action = torch.distributions.Categorical(logits=logits).sample()  # (N, L)
+            # token_action = torch.distributions.Categorical(logits=logits).sample()  # (N, L)
+            token_action = logits.argmax(dim=-1)
         else:
             if not self.config.no_ACT_continue:
                 halt_action = halt_logits.argmax(dim=-1)  # (N,) deterministic

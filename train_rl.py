@@ -171,6 +171,8 @@ def create_model(config: TrainRLConfig, train_metadata: PuzzleDatasetMetadata, r
                 for param in list(model.parameters()) + list(model.buffers()):
                     dist.broadcast(param, src=0)
 
+    # [TODO] Refactor to fix design flaw: Should not need to init ref model manually here (in train_rl.py), 
+    # ref model is for GRPO KL penalty, and should be in the loss head.
     # Create frozen ref_model AFTER checkpoint is loaded (so deepcopy gets correct weights)
     model.init_ref_model()
 

@@ -189,6 +189,19 @@ class GRPOLossHead(nn.Module):
             adv = (rewards_grouped - baseline) / std
             adv = adv.view(-1)
 
+            std_g = rewards_grouped.std(dim=1, unbiased=False)
+            any_pos_g = (rewards_grouped > 0).any(dim=1).float() # (B,)
+            zero_std_g = (std_g < 1e-8).float()                  # (B,)
+
+            # 變成 sample-level，讓外部 /count 後仍是 ratio
+            any_pos_s = any_pos_g.repeat_interleave(G)           # (N,)
+            zero_std_s = zero_std_g.repeat_interleave(G)         # (N,)
+            std_s = std_g.repeat_interleave(G)                   # (N,)
+
+            # 只統計 valid_metrics 的那些 sample（跟你現有 count 對齊）
+            vm = valid_metrics  # shape (N,)
+            vm_f = vm.float()
+
         # policy gradient loss
         pg_loss: torch.Tensor = -(adv * new_carry.total_logprob).sum()
         
@@ -208,6 +221,10 @@ class GRPOLossHead(nn.Module):
             "ent_loss": ent_loss.detach(),
             "kl_loss": kl_loss.detach(),
             "reward": rewards.sum(),
+            "groups_with_any_correct": (any_pos_s * vm_f).sum(),
+            "zero_std_groups": (zero_std_s * vm_f).sum(),
+            "mean_group_std": (std_s * vm_f).sum(),
+            "adv_mean_abs": (adv.abs() * vm_f).sum(),
         })
 
         detached_outputs = {k: outputs[k].detach() for k in return_keys if k in outputs}
