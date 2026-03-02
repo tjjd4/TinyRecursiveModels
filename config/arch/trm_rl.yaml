@@ -2,9 +2,9 @@ name: recursive_reasoning.trm_rl@TinyRecursiveReasoningModel_RL
 loss:
   name: losses.grpo_loss@GRPOLossHead
   entropy_bonus: 0.005
-  kl_beta: 0.02
+  kl_beta: 0.0
   reward:
-    name: losses.rewards.adaptive_reward@AdaptiveReward
+    name: losses.rewards.default_reward@DefaultReward
     num_generations: ${num_generations}
     correct_reward: 1.0
     len_penalty: 0.01
@@ -13,6 +13,9 @@ loss:
 
 halt_exploration_prob: 0.1
 halt_max_steps: 16
+
+temperature: 0.7    # 1.0 = no scaling, <1 more greedy, >1 more random
+top_p: 0.9          # 1.0 = no nucleus sampling, <1 enable top-p filtering
 
 H_cycles: 3
 L_cycles: 6

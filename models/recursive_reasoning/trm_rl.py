@@ -3,11 +3,12 @@ from typing import Dict, Tuple
 
 import torch
 from torch import nn
+import torch.nn.functional as F
 
 from .trm import (
-    TinyRecursiveReasoningModel_ACTV1,
-    TinyRecursiveReasoningModel_ACTV1Carry,
-    TinyRecursiveReasoningModel_ACTV1InnerCarry
+    TinyRecursiveReasoningModel_ACTV1InnerCarry,
+    TinyRecursiveReasoningModel_ACTV1Config,
+    TinyRecursiveReasoningModel_ACTV1_Inner,
 )
 
 @dataclass
@@ -25,8 +26,24 @@ class TinyRecursiveReasoningModel_GRPOCarry:
 
     current_data: Dict[str, torch.Tensor]
 
+class TinyRecursiveReasoningModel_RLConfig(TinyRecursiveReasoningModel_ACTV1Config):
+    temperature: float = 1.0    # 1.0 = no scaling, <1 more greedy, >1 more random
+    top_p: float = 1.0          # 1.0 = no nucleus sampling, <1 enable top-p filtering
 
-class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
+
+class TinyRecursiveReasoningModel_RL(nn.Module):
+    """RL wrapper."""
+
+    def __init__(self, config_dict: dict):
+        super().__init__()
+        self.config = TinyRecursiveReasoningModel_RLConfig(**config_dict)
+        self.inner = TinyRecursiveReasoningModel_ACTV1_Inner(self.config)
+
+    @property
+    def puzzle_emb(self):
+        return self.inner.puzzle_emb
+
+
     def initial_carry(self, batch: Dict[str, torch.Tensor]) -> TinyRecursiveReasoningModel_GRPOCarry:
         device = batch["inputs"].device
         batch_size = batch["inputs"].shape[0]
@@ -115,8 +132,17 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
         # Training: sample for exploration; Eval: argmax for deterministic prediction
         if self.training:
             halt_action = halt_dist.sample()  # (N,) 0=Cont, 1=Halt
-            # token_action = torch.distributions.Categorical(logits=logits).sample()  # (N, L)
-            token_action = logits.argmax(dim=-1)
+            scaled_logits = logits / self.config.temperature
+            sorted_logits, sorted_indices = torch.sort(scaled_logits, descending=True, dim=-1)
+            cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+
+            sorted_mask = cumulative_probs - F.softmax(sorted_logits, dim=-1) >= self.config.top_p
+            sorted_mask[..., 0] = False  # Ensure at least the top-1 token is never masked out
+            sorted_logits[sorted_mask] = float('-inf')
+
+            scaled_logits = sorted_logits.scatter(-1, sorted_indices, sorted_logits)
+
+            token_action = torch.distributions.Categorical(logits=scaled_logits).sample()
         else:
             if not self.config.no_ACT_continue:
                 halt_action = halt_logits.argmax(dim=-1)  # (N,) deterministic
@@ -128,13 +154,9 @@ class TinyRecursiveReasoningModel_RL(TinyRecursiveReasoningModel_ACTV1):
 
         halt_action = torch.where(is_last_step, torch.ones_like(halt_action), halt_action)
 
-        # Mask for sequences that were active before this step
-        active_mask_float = (~carry.halted).float()
         new_halted = carry.halted | (halt_action == 1)
-
         # Mask for sequences that were just halted in this step
         just_halted = new_halted & (~carry.halted)
-        just_halted_mask_float = just_halted.float()
 
 
         with torch.no_grad():

@@ -113,7 +113,7 @@ class GRPOLossHead(nn.Module):
             new_carry.total_logprob = new_carry.total_logprob + step_halt_logprob * active_mask_float + step_token_logprob * just_halted_mask_float
             new_carry.total_entropy = new_carry.total_entropy + step_halt_entropy * active_mask_float + step_token_entropy * just_halted_mask_float
 
-            # --- KL divergence against ref_model ---
+            # KL divergence against ref_model
             if self.ref_model is not None:
                 with torch.no_grad():
                     num_tokens = mask.sum(-1).clamp_min(1)

@@ -18,7 +18,7 @@ evaluators:
 
 # Hyperparams - Training
 global_batch_size: 64
-micro_batch_size: 8
+micro_batch_size: 4
 eval_batch_size: 64
 
 epochs: 1000
@@ -42,7 +42,7 @@ seed: 0
 min_eval_interval: 0 # when to start the eval
 
 # Hyperparams - GRPO
-num_generations: 4
+num_generations: 8
 
 ema: False # use Exponential-Moving-Average
 ema_rate: 0.999 # EMA-rate
