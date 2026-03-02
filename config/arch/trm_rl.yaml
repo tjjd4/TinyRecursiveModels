@@ -1,8 +1,10 @@
 name: recursive_reasoning.trm_rl@TinyRecursiveReasoningModel_RL
 loss:
   name: losses.grpo_loss@GRPOLossHead
-  entropy_bonus: 0.005
-  kl_beta: 0.0
+  entropy_halt_bonus: 0.01
+  entropy_token_bonus: 0.001
+  kl_halt_beta: 0.005
+  kl_token_beta: 0.02
   reward:
     name: losses.rewards.default_reward@DefaultReward
     num_generations: ${num_generations}
@@ -11,7 +13,7 @@ loss:
     len_reward: 0.1
     p_cutoff: 0.9
 
-halt_exploration_prob: 0.1
+halt_exploration_prob: 0.1  # no used in RL (only used in ACT, save for compatibility)
 halt_max_steps: 16
 
 temperature: 0.7    # 1.0 = no scaling, <1 more greedy, >1 more random

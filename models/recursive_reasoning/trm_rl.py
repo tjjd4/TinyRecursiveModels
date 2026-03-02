@@ -17,12 +17,15 @@ class TinyRecursiveReasoningModel_GRPOCarry:
     steps: torch.Tensor
     halted: torch.Tensor
 
-    total_logprob: torch.Tensor    # (N,)
-    total_entropy: torch.Tensor    # (N,)
+    total_halt_logprob: torch.Tensor    # (N,)
+    total_token_logprob: torch.Tensor    # (N,)
+    total_halt_entropy: torch.Tensor    # (N,)
+    total_token_entropy: torch.Tensor    # (N,)
     final_actions: torch.Tensor    # (N, L)
     final_halt_actions: torch.Tensor    # (N, L)
 
-    total_kl: torch.Tensor
+    total_halt_kl: torch.Tensor
+    total_token_kl: torch.Tensor
 
     current_data: Dict[str, torch.Tensor]
 
@@ -54,12 +57,15 @@ class TinyRecursiveReasoningModel_RL(nn.Module):
             steps=torch.zeros((batch_size, ), dtype=torch.int32, device=device),
             halted=torch.ones(batch_size, dtype=torch.bool, device=device),
 
-            total_logprob=torch.zeros(batch_size, device=device),
-            total_entropy=torch.zeros(batch_size, device=device),
+            total_halt_logprob=torch.zeros(batch_size, device=device),
+            total_token_logprob=torch.zeros(batch_size, device=device),
+            total_halt_entropy=torch.zeros(batch_size, device=device),
+            total_token_entropy=torch.zeros(batch_size, device=device),
             final_actions=torch.zeros_like(batch["inputs"], dtype=torch.long),
             final_halt_actions=torch.zeros(batch_size, dtype=torch.long, device=device),
 
-            total_kl=torch.zeros(batch_size, device=device),
+            total_halt_kl=torch.zeros(batch_size, device=device),
+            total_token_kl=torch.zeros(batch_size, device=device),
 
             current_data={k: torch.empty_like(v) for k, v in batch.items()},
         )
@@ -71,11 +77,14 @@ class TinyRecursiveReasoningModel_RL(nn.Module):
             inner_carry=new_inner_carry,
             steps=torch.zeros_like(carry.steps),
             halted=torch.zeros_like(carry.halted),
-            total_logprob=torch.zeros_like(carry.total_logprob),
-            total_entropy=torch.zeros_like(carry.total_entropy),
+            total_halt_logprob=torch.zeros_like(carry.total_halt_logprob),
+            total_token_logprob=torch.zeros_like(carry.total_token_logprob),
+            total_halt_entropy=torch.zeros_like(carry.total_halt_entropy),
+            total_token_entropy=torch.zeros_like(carry.total_token_entropy),
             final_actions=torch.zeros_like(carry.final_actions),
             final_halt_actions=torch.zeros_like(carry.final_halt_actions),
-            total_kl=torch.zeros_like(carry.total_kl),
+            total_halt_kl=torch.zeros_like(carry.total_halt_kl),
+            total_token_kl=torch.zeros_like(carry.total_token_kl),
             current_data={k: torch.empty_like(v) for k, v in carry.current_data.items()},
         )
 
@@ -175,11 +184,14 @@ class TinyRecursiveReasoningModel_RL(nn.Module):
             steps=new_steps,
             halted=new_halted,
             current_data=new_current_data,
-            total_logprob=carry.total_logprob,
-            total_entropy=carry.total_entropy,
+            total_halt_logprob=carry.total_halt_logprob,
+            total_token_logprob=carry.total_token_logprob,
+            total_halt_entropy=carry.total_halt_entropy,
+            total_token_entropy=carry.total_token_entropy,
             final_actions=new_final_actions,
             final_halt_actions=new_final_halt_actions,
-            total_kl=carry.total_kl,
+            total_halt_kl=carry.total_halt_kl,
+            total_token_kl=carry.total_token_kl,
         )
 
         return new_carry, outputs

@@ -15,8 +15,10 @@ class RewardConfig(pydantic.BaseModel):
 
 class GRPOLossConfig(pydantic.BaseModel):
     num_generations: int
-    entropy_bonus: float
-    kl_beta: float
+    entropy_halt_bonus: float
+    entropy_token_bonus: float
+    kl_halt_beta: float
+    kl_token_beta: float
     reward: RewardConfig
 
 class GRPOLossHead(nn.Module):
@@ -40,7 +42,7 @@ class GRPOLossHead(nn.Module):
         self.ref_model = None
 
     def init_ref_model(self):
-        if hasattr(self.config, "kl_beta") and self.config.kl_beta > 0.0:
+        if (hasattr(self.config, "kl_halt_beta") or hasattr(self.config, "kl_token_beta")) and (self.config.kl_halt_beta > 0.0 or self.config.kl_token_beta > 0.0):
             self.ref_model = copy.deepcopy(self.model)
             for p in self.ref_model.parameters():
                 p.requires_grad = False
@@ -81,6 +83,8 @@ class GRPOLossHead(nn.Module):
         new_carry, outputs = self.model(carry=carry, batch=batch, **model_kwargs)
         labels = new_carry.current_data["labels"]
         mask = (labels != IGNORE_LABEL_ID)
+        # token level metrics need to divide by num_tokens to normalize
+        num_tokens = mask.sum(-1).clamp_min(1)
 
         # Compute logprob and entropy then accumulate into carry (only training)
         if self.training:
@@ -102,22 +106,23 @@ class GRPOLossHead(nn.Module):
             step_halt_entropy = halt_dist.entropy()  # (N,)
 
             # Token log_prob / entropy (only valid positions)
-            step_token_logprob = (token_dist.log_prob(sampled_token_action.long()) * mask).sum(dim=-1)  # (N,)
-            step_token_entropy = (token_dist.entropy() * mask).sum(dim=-1)  # (N,)
+            step_token_logprob = (token_dist.log_prob(sampled_token_action.long()) * mask).sum(dim=-1) / num_tokens  # (N,)
+            step_token_entropy = (token_dist.entropy() * mask).sum(dim=-1) / num_tokens  # (N,)
 
             # Masks for accumulation
             active_mask_float = (~carry.halted).float()
             just_halted_mask_float = (new_carry.halted & ~carry.halted).float()
 
             # Accumulate logprob and entropy into carry
-            new_carry.total_logprob = new_carry.total_logprob + step_halt_logprob * active_mask_float + step_token_logprob * just_halted_mask_float
-            new_carry.total_entropy = new_carry.total_entropy + step_halt_entropy * active_mask_float + step_token_entropy * just_halted_mask_float
+            new_carry.total_halt_logprob = new_carry.total_halt_logprob + step_halt_logprob * active_mask_float
+            new_carry.total_token_logprob = new_carry.total_token_logprob + step_token_logprob * just_halted_mask_float
+
+            new_carry.total_halt_entropy = new_carry.total_halt_entropy + step_halt_entropy * active_mask_float
+            new_carry.total_token_entropy = new_carry.total_token_entropy + step_token_entropy * just_halted_mask_float
 
             # KL divergence against ref_model
             if self.ref_model is not None:
                 with torch.no_grad():
-                    num_tokens = mask.sum(-1).clamp_min(1)
-
                     _, ref_logits, (ref_q_halt, ref_q_cont) = self.ref_model.inner(carry.inner_carry, batch, **model_kwargs)
 
                     if not self.model.config.no_ACT_continue:
@@ -129,18 +134,14 @@ class GRPOLossHead(nn.Module):
                         ref_halt_dist = torch.distributions.Bernoulli(logits=ref_halt_logits)
 
                     ref_token_dist = torch.distributions.Categorical(logits=ref_logits)
-
-                    ref_halt_logprob = ref_halt_dist.log_prob(sampled_halt_action.float())  # (N,)
                     ref_token_logprob = (ref_token_dist.log_prob(sampled_token_action.long()) * mask).sum(dim=-1)  # (N,)
 
-                step_halt_kl = step_halt_logprob - ref_halt_logprob
-                # divide by num_tokens to normalize
+                step_halt_kl = torch.distributions.kl_divergence(halt_dist, ref_halt_dist)  # (N,)
                 step_token_kl = (step_token_logprob - ref_token_logprob) / num_tokens
 
-                step_total_kl = step_halt_kl * active_mask_float + step_token_kl * just_halted_mask_float
-
                 # Accumulate KL into carry
-                new_carry.total_kl = new_carry.total_kl + step_total_kl
+                new_carry.total_halt_kl = new_carry.total_halt_kl + step_halt_kl * active_mask_float
+                new_carry.total_token_kl = new_carry.total_token_kl + step_token_kl * just_halted_mask_float
 
         with torch.no_grad():
             # Correctness
@@ -203,23 +204,35 @@ class GRPOLossHead(nn.Module):
             vm_f = vm.float()
 
         # policy gradient loss
-        pg_loss: torch.Tensor = -(adv * new_carry.total_logprob).sum()
+        pg_halt: torch.Tensor = -(adv * new_carry.total_halt_logprob).sum()
+        pg_token: torch.Tensor = -(adv * new_carry.total_token_logprob).sum()
+        pg_loss: torch.Tensor = pg_halt + pg_token
         
         ent_loss: torch.Tensor = torch.tensor(0.0, device=device)
         # optional entropy bonus (maximize entropy => subtract negative)
-        if self.config.entropy_bonus != 0.0:
-            ent_loss: torch.Tensor = -self.config.entropy_bonus * (new_carry.total_entropy / new_carry.steps.clamp_min(1)).sum()
+        if self.config.entropy_halt_bonus != 0.0 or self.config.entropy_token_bonus != 0.0:
+            ent_halt: torch.Tensor = -self.config.entropy_halt_bonus * (new_carry.total_halt_entropy / new_carry.steps.clamp_min(1)).sum()
+            ent_token: torch.Tensor = -self.config.entropy_token_bonus * new_carry.total_token_entropy.sum()
+            ent_loss: torch.Tensor = ent_halt + ent_token
 
         # KL divergence loss: sum across all recursive steps
-        kl_loss: torch.Tensor = self.config.kl_beta * new_carry.total_kl.sum()
+        kl_halt: torch.Tensor = self.config.kl_halt_beta * (new_carry.total_halt_kl / new_carry.steps.clamp_min(1)).sum()
+        kl_token: torch.Tensor = self.config.kl_token_beta * new_carry.total_token_kl.sum()
+        kl_loss: torch.Tensor = kl_halt + kl_token
 
         grpo_loss: torch.Tensor = (pg_loss + ent_loss + kl_loss) / float(G)
 
         metrics.update({
             "grpo_loss": grpo_loss.detach(),
             "pg_loss": pg_loss.detach(),
+            "pg_halt": pg_halt.detach(),
+            "pg_token": pg_token.detach(),
             "ent_loss": ent_loss.detach(),
+            "ent_halt": ent_halt.detach(),
+            "ent_token": ent_token.detach(),
             "kl_loss": kl_loss.detach(),
+            "kl_halt": kl_halt.detach(),
+            "kl_token": kl_token.detach(),
             "reward": rewards.sum(),
             "groups_with_any_correct": (any_pos_s * vm_f).sum(),
             "zero_std_groups": (zero_std_s * vm_f).sum(),
