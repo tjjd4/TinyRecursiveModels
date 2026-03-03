@@ -143,9 +143,10 @@ class TinyRecursiveReasoningModel_RL(nn.Module):
             halt_action = halt_dist.sample()  # (N,) 0=Cont, 1=Halt
             scaled_logits = logits / self.config.temperature
             sorted_logits, sorted_indices = torch.sort(scaled_logits, descending=True, dim=-1)
-            cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+            probs = F.softmax(sorted_logits, dim=-1)
+            cumulative_probs = torch.cumsum(probs, dim=-1)
 
-            sorted_mask = cumulative_probs - F.softmax(sorted_logits, dim=-1) >= self.config.top_p
+            sorted_mask = (cumulative_probs - probs) >= self.config.top_p
             sorted_mask[..., 0] = False  # Ensure at least the top-1 token is never masked out
             sorted_logits[sorted_mask] = float('-inf')
 
