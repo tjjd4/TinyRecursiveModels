@@ -42,7 +42,7 @@ class GRPOLossHead(nn.Module):
         self.ref_model = None
 
     def init_ref_model(self):
-        if (hasattr(self.config, "kl_halt_beta") or hasattr(self.config, "kl_token_beta")) and (self.config.kl_halt_beta > 0.0 or self.config.kl_token_beta > 0.0):
+        if self.config.kl_halt_beta > 0.0 or self.config.kl_token_beta > 0.0:
             self.ref_model = copy.deepcopy(self.model)
             for p in self.ref_model.parameters():
                 p.requires_grad = False
@@ -211,14 +211,16 @@ class GRPOLossHead(nn.Module):
         ent_loss: torch.Tensor = torch.tensor(0.0, device=device)
         # optional entropy bonus (maximize entropy => subtract negative)
         if self.config.entropy_halt_bonus != 0.0 or self.config.entropy_token_bonus != 0.0:
-            ent_halt: torch.Tensor = -self.config.entropy_halt_bonus * (new_carry.total_halt_entropy / new_carry.steps.clamp_min(1)).sum()
+            ent_halt: torch.Tensor = -self.config.entropy_halt_bonus * new_carry.total_halt_entropy.sum()
             ent_token: torch.Tensor = -self.config.entropy_token_bonus * new_carry.total_token_entropy.sum()
             ent_loss: torch.Tensor = ent_halt + ent_token
-
+        
+        kl_loss: torch.Tensor = torch.tensor(0.0, device=device)
         # KL divergence loss: sum across all recursive steps
-        kl_halt: torch.Tensor = self.config.kl_halt_beta * (new_carry.total_halt_kl / new_carry.steps.clamp_min(1)).sum()
-        kl_token: torch.Tensor = self.config.kl_token_beta * new_carry.total_token_kl.sum()
-        kl_loss: torch.Tensor = kl_halt + kl_token
+        if self.config.kl_halt_beta != 0.0 or self.config.kl_token_beta != 0.0:
+            kl_halt: torch.Tensor = self.config.kl_halt_beta * new_carry.total_halt_kl.sum()
+            kl_token: torch.Tensor = self.config.kl_token_beta * new_carry.total_token_kl.sum()
+            kl_loss: torch.Tensor = kl_halt + kl_token
 
         grpo_loss: torch.Tensor = (pg_loss + ent_loss + kl_loss) / float(G)
 
