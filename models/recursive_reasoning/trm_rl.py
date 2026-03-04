@@ -122,9 +122,6 @@ class TinyRecursiveReasoningModel_RL(nn.Module):
             "q_continue_logits": q_continue_logits # (B,)
         }
 
-        # Step
-        new_steps = torch.where(carry.halted, new_steps, new_steps + 1)
-
         """
         if no_ACT_continue == false, q_continue_logits weight = 0 => NO usage of q_continue_logits
         """
@@ -137,39 +134,40 @@ class TinyRecursiveReasoningModel_RL(nn.Module):
             halt_logits = q_halt_logits
             halt_dist = torch.distributions.Bernoulli(logits=halt_logits)
 
-
-        # Training: sample for exploration; Eval: argmax for deterministic prediction
-        if self.training:
-            halt_action = halt_dist.sample()  # (N,) 0=Cont, 1=Halt
-            scaled_logits = logits / self.config.temperature
-            sorted_logits, sorted_indices = torch.sort(scaled_logits, descending=True, dim=-1)
-            probs = F.softmax(sorted_logits, dim=-1)
-            cumulative_probs = torch.cumsum(probs, dim=-1)
-
-            sorted_mask = (cumulative_probs - probs) >= self.config.top_p
-            sorted_mask[..., 0] = False  # Ensure at least the top-1 token is never masked out
-            sorted_logits[sorted_mask] = float('-inf')
-
-            scaled_logits = sorted_logits.scatter(-1, sorted_indices, sorted_logits)
-
-            token_action = torch.distributions.Categorical(logits=scaled_logits).sample()
-        else:
-            if not self.config.no_ACT_continue:
-                halt_action = halt_logits.argmax(dim=-1)  # (N,) deterministic
-            else:
-                halt_action = (halt_logits > 0).long()
-            token_action = logits.argmax(dim=-1)  # (N,) deterministic
-        
-        is_last_step = new_steps >= self.config.halt_max_steps
-
-        halt_action = torch.where(is_last_step, torch.ones_like(halt_action), halt_action)
-
-        new_halted = carry.halted | (halt_action == 1)
-        # Mask for sequences that were just halted in this step
-        just_halted = new_halted & (~carry.halted)
-
-
         with torch.no_grad():
+            # Step
+            new_steps = torch.where(carry.halted, new_steps, new_steps + 1)
+
+            # Training: sample for exploration; Eval: argmax for deterministic prediction
+            if self.training:
+                halt_action = halt_dist.sample()  # (N,) 0=Cont, 1=Halt
+                scaled_logits = logits / self.config.temperature
+                sorted_logits, sorted_indices = torch.sort(scaled_logits, descending=True, dim=-1)
+                probs = F.softmax(sorted_logits, dim=-1)
+                cumulative_probs = torch.cumsum(probs, dim=-1)
+
+                sorted_mask = (cumulative_probs - probs) >= self.config.top_p
+                sorted_mask[..., 0] = False  # Ensure at least the top-1 token is never masked out
+                sorted_logits[sorted_mask] = float('-inf')
+
+                scaled_logits = sorted_logits.scatter(-1, sorted_indices, sorted_logits)
+
+                token_action = torch.distributions.Categorical(logits=scaled_logits).sample()
+            else:
+                if not self.config.no_ACT_continue:
+                    halt_action = halt_logits.argmax(dim=-1)  # (N,) deterministic
+                else:
+                    halt_action = (halt_logits > 0).long()
+                token_action = logits.argmax(dim=-1)  # (N,) deterministic
+            
+            is_last_step = new_steps >= self.config.halt_max_steps
+
+            halt_action = torch.where(is_last_step, torch.ones_like(halt_action), halt_action)
+
+            new_halted = carry.halted | (halt_action == 1)
+            # Mask for sequences that were just halted in this step
+            just_halted = new_halted & (~carry.halted)
+
             just_halted_mask = just_halted.unsqueeze(-1)
             
             new_final_actions = torch.where(just_halted_mask, token_action, carry.final_actions)
