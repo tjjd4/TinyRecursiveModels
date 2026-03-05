@@ -397,6 +397,9 @@ def train_batch(config: TrainRLConfig, train_state: TrainState, batch: Any, glob
                 if p.grad is not None:
                     dist.all_reduce(p.grad)
 
+        # Clip gradients (GRPO: To avoid exploding gradients)
+        grad_norm = torch.nn.utils.clip_grad_norm_(train_state.model.parameters(), max_norm=1, norm_type=2)
+
         # Apply optimizer
         lr_this_step = None
         for optim, base_lr in zip(train_state.optimizers, train_state.optimizer_lrs):
@@ -429,6 +432,7 @@ def train_batch(config: TrainRLConfig, train_state: TrainState, batch: Any, glob
                 reduced_metrics = {f"train/{k}": v / (config.global_batch_size if k.endswith("loss") else count) for k, v in reduced_metrics.items()}
 
                 reduced_metrics["train/lr"] = lr_this_step
+                reduced_metrics["train/grad_norm"] = grad_norm.detach().item()
         # [Gradient Accumulation] reset accumulated metrics on update step
         train_state.accumulated_metrics = None
     # [Gradient Accumulation] Non-update steps return None for metrics
