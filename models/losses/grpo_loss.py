@@ -106,7 +106,7 @@ class GRPOLossHead(nn.Module):
             step_halt_entropy = halt_dist.entropy()  # (N,)
 
             # Token log_prob / entropy (only valid positions)
-            step_token_logprob = (token_dist.log_prob(sampled_token_action.long()) * mask).sum(dim=-1) / num_tokens  # (N,)
+            step_token_logprob = (token_dist.log_prob(sampled_token_action.long()) * mask).sum(dim=-1)  # (N,)
             step_token_entropy = (token_dist.entropy() * mask).sum(dim=-1) / num_tokens  # (N,)
 
             # Masks for accumulation
