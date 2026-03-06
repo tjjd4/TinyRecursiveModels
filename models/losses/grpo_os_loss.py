@@ -21,7 +21,7 @@ class GRPOLossConfig(pydantic.BaseModel):
     kl_token_beta: float
     reward: RewardConfig
 
-class GRPOLossHead(nn.Module):
+class GRPOOSLossHead(nn.Module):
     def __init__(
         self,
         model: nn.Module,
@@ -40,6 +40,7 @@ class GRPOLossHead(nn.Module):
 
         # ref_model will be initialized after checkpoint loading via init_ref_model()
         self.ref_model = None
+        print("num_generations: ", self.config.num_generations)
 
     def init_ref_model(self):
         if self.config.kl_halt_beta > 0.0 or self.config.kl_token_beta > 0.0:

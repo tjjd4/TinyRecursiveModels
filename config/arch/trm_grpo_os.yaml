@@ -1,6 +1,7 @@
-name: recursive_reasoning.trm_rl@TinyRecursiveReasoningModel_RL
+name: recursive_reasoning.trm_grpo@TinyRecursiveReasoningModel_GRPO
 loss:
-  name: losses.grpo_loss@GRPOLossHead
+  name: losses.grpo_os_loss@GRPOOSLossHead
+  num_generations: ${num_generations}
   entropy_halt_bonus: 0.01
   entropy_token_bonus: 0.001
   kl_halt_beta: 0.005

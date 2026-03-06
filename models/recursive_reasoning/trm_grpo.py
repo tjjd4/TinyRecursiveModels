@@ -29,17 +29,17 @@ class TinyRecursiveReasoningModel_GRPOCarry:
 
     current_data: Dict[str, torch.Tensor]
 
-class TinyRecursiveReasoningModel_RLConfig(TinyRecursiveReasoningModel_ACTV1Config):
+class TinyRecursiveReasoningModel_GRPOConfig(TinyRecursiveReasoningModel_ACTV1Config):
     temperature: float = 1.0    # 1.0 = no scaling, <1 more greedy, >1 more random
     top_p: float = 1.0          # 1.0 = no nucleus sampling, <1 enable top-p filtering
 
 
-class TinyRecursiveReasoningModel_RL(nn.Module):
-    """RL wrapper."""
+class TinyRecursiveReasoningModel_GRPO(nn.Module):
+    """GRPO wrapper."""
 
     def __init__(self, config_dict: dict):
         super().__init__()
-        self.config = TinyRecursiveReasoningModel_RLConfig(**config_dict)
+        self.config = TinyRecursiveReasoningModel_GRPOConfig(**config_dict)
         self.inner = TinyRecursiveReasoningModel_ACTV1_Inner(self.config)
 
     @property

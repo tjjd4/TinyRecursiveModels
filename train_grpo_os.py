@@ -142,7 +142,6 @@ def create_model(config: TrainRLConfig, train_metadata: PuzzleDatasetMetadata, r
 
     loss_cfg = dict(
         **config.arch.loss.__pydantic_extra__,
-        num_generations=config.num_generations,
         reward=dict(
             **config.arch.loss.reward.__pydantic_extra__,
             name=config.arch.loss.reward.name,
@@ -701,7 +700,7 @@ def load_synced_config(hydra_config: DictConfig, rank: int, world_size: int) -> 
     return objects[0]  # type: ignore
 
 
-@hydra.main(config_path="config", config_name="cfg_train_rl", version_base=None)
+@hydra.main(config_path="config", config_name="cfg_train_grpo", version_base=None)
 def launch(hydra_config: DictConfig):
     RANK = 0
     WORLD_SIZE = 1
