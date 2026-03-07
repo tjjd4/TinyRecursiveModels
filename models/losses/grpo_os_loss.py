@@ -164,11 +164,12 @@ class GRPOOSLossHead(nn.Module):
                 "steps":          torch.where(valid_metrics, new_carry.steps, 0).sum(),
             }
 
-            # if not finished yet
-            if not new_carry.halted.all() or not self.training:
-                detached_outputs = {k: outputs[k].detach() for k in return_keys if k in outputs}
-                return new_carry, None, metrics, detached_outputs, new_carry.halted.all()
+        # if not finished yet
+        if not new_carry.halted.all() or not self.training:
+            detached_outputs = {k: outputs[k].detach() for k in return_keys if k in outputs}
+            return new_carry, None, metrics, detached_outputs, new_carry.halted.all()
 
+        with torch.no_grad():
             device = batch["inputs"].device
             N = batch["inputs"].shape[0]  # expanded batch size
             G = self.config.num_generations
