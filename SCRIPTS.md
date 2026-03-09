@@ -17,6 +17,20 @@ load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t
 +run_name=${run_name}
 ```
 
+#### Z Analysis
+```bash
+run_name="eval_pretrain_mlp_t_sudoku_z_analysis_44"
+python z_analysis.py \
+arch=trm \
+data_paths="[data/sudoku-extreme-1k-aug-1000]" \
+evaluators="[]" \
+arch.mlp_t=True arch.pos_encodings=none \
+arch.L_layers=2 \
+arch.H_cycles=3 arch.L_cycles=6 \
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_44/step_65104" \
++run_name=${run_name}
+```
+
 ### Maze-Hard:
 
 ```bash
