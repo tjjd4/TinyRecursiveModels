@@ -238,11 +238,11 @@ class ZAnalysisCollector:
         self._z_H_per_step_batch = [[] for _ in range(batch_size)]
         self._z_H_pos_per_step_batch = [[] for _ in range(batch_size)]
         self._batch_open = True
-        inputs_np = batch["inputs"].cpu().numpy()   # (B, L_full)
+        inputs_np = batch["inputs"].cpu().numpy()   # (B, 81) — cell tokens only, no puzzle-emb prefix
         self._given_masks_batch = []
         for b in range(batch_size):
-            cell_inputs = inputs_np[b, config.arch.puzzle_emb_len:]   # (81,)
-            given = cell_inputs > 0                        # (81,) bool
+            cell_inputs = inputs_np[b, :81]   # (81,) cell tokens
+            given = cell_inputs > 0            # (81,) bool
             self._given_masks_batch.append(given)
 
     def record_step(self, carry):
