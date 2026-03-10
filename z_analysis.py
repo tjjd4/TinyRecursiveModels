@@ -255,7 +255,7 @@ class ZAnalysisCollector:
 
         # Determine per-puzzle correctness from final prediction
         preds = final_preds
-        mask    = (labels != -100)
+        mask = (labels != -100)
         correct = ((preds == labels) & mask).sum(-1) == mask.sum(-1)  # (B,) bool
         correct_np = correct.cpu().numpy()
 
@@ -288,6 +288,7 @@ def run_z_analysis(
     config: EvalConfig,
     save_dir: str,
     rank: int,
+    train_state: TrainState,
     wandb_step: int = 0,
 ):
     """Fit PCA, save all plots, and log everything to wandb. Only runs on rank 0."""
@@ -311,28 +312,35 @@ def run_z_analysis(
     max_s = config.z_analysis_max_samples_pca
     trajs = collector.trajectories
     if len(trajs) > max_s:
-        rng  = np.random.default_rng(0)
+        rng = np.random.default_rng(0)
         idxs = rng.choice(len(trajs), max_s, replace=False).tolist()
     else:
         idxs = list(range(len(trajs)))
 
-    sub_trajs  = [trajs[i] for i in idxs]
-    sub_flags  = [collector.correct_flags[i] for i in idxs]
+    sub_trajs = [trajs[i] for i in idxs]
+    sub_flags = [collector.correct_flags[i] for i in idxs]
 
-    all_vecs   = np.concatenate(sub_trajs, axis=0)    # (sum_T, D)
+    all_vecs = np.concatenate(sub_trajs, axis=0)    # (sum_T, D)
     sample_ids = np.concatenate(
         [np.full(t.shape[0], si, dtype=int) for si, t in enumerate(sub_trajs)]
     )
 
     n_comp = min(config.z_analysis_pca_components, all_vecs.shape[1], all_vecs.shape[0])
-    pca    = PCA(n_components=n_comp, random_state=0)
-    proj   = pca.fit_transform(all_vecs)   # (sum_T, n_comp)
+    pca = PCA(n_components=n_comp, random_state=0)
+    proj = pca.fit_transform(all_vecs)   # (sum_T, n_comp)
+
+    h_init = train_state.model.model.inner.H_init
+    h_init_vec = h_init.float().cpu().numpy().reshape(1, -1)
+    proj_hinit_single = pca.transform(h_init_vec)[:, :2]   # (1, 2)
+    proj_inits = np.repeat(proj_hinit_single, len(sub_trajs), axis=0)  # (N, 2)
 
     # ── scalar metrics ─────────────────────────────────────────────────────
     wandb_log: dict = {}
 
     wandb_log["z_analysis/n_samples"]       = n
     wandb_log["z_analysis/accuracy"]        = n_correct / n if n > 0 else 0.0
+    wandb_log["z_analysis/hinit_pc1"] = float(proj_hinit_single[0, 0])
+    wandb_log["z_analysis/hinit_pc2"] = float(proj_hinit_single[0, 1])
     wandb_log["z_analysis/pca_pc1_var_pct"] = float(pca.explained_variance_ratio_[0] * 100)
     wandb_log["z_analysis/pca_pc2_var_pct"] = float(pca.explained_variance_ratio_[1] * 100)
     wandb_log["z_analysis/pca_top2_cumvar_pct"] = float(
@@ -340,7 +348,7 @@ def run_z_analysis(
     )
 
     # Per-group residual and displacement stats
-    correct_idxs   = [i for i, f in enumerate(collector.correct_flags) if f]
+    correct_idxs = [i for i, f in enumerate(collector.correct_flags) if f]
     incorrect_idxs = [i for i, f in enumerate(collector.correct_flags) if not f]
 
     for group_name, group_idxs in [("correct", correct_idxs), ("incorrect", incorrect_idxs)]:
@@ -348,7 +356,7 @@ def run_z_analysis(
             continue
         # Mean final-step residual (last entry of each residual array)
         final_resids = [collector.residuals[i][-1] for i in group_idxs]
-        mean_resids  = [collector.residuals[i].mean() for i in group_idxs]
+        mean_resids = [collector.residuals[i].mean() for i in group_idxs]
         # Total displacement
         disps = []
         for i in group_idxs:
@@ -385,6 +393,7 @@ def run_z_analysis(
     wandb_log["z_analysis/pca_variance"]      = _save_wandb(_plot_pca_variance(pca, save_dir),                                  save_dir, "pca_variance.png")
     wandb_log["z_analysis/displacement_hist"] = _save_wandb(_plot_displacement_hist(collector.trajectories, collector.correct_flags, save_dir), save_dir, "displacement_histogram.png")
     wandb_log["z_analysis/pca_step0_final"]   = _save_wandb(_plot_step0_vs_final(proj, sample_ids, sub_flags, save_dir),        save_dir, "pca_step0_vs_final.png")
+    wandb_log["z_analysis/pca_hinit_final"]   = _save_wandb(_plot_hinit_vs_final(proj_inits, proj, sample_ids, sub_flags, save_dir), save_dir, "pca_hinit_vs_final.png")
 
     # Drop None values (plots that returned None due to insufficient data)
     wandb_log = {k: v for k, v in wandb_log.items() if v is not None}
@@ -409,7 +418,7 @@ def _make_residual_table(residuals: List[np.ndarray], flags: List[bool]) -> Opti
     if max_T == 0:
         return None
 
-    correct_idxs   = [i for i, f in enumerate(flags) if f]
+    correct_idxs = [i for i, f in enumerate(flags) if f]
     incorrect_idxs = [i for i, f in enumerate(flags) if not f]
 
     def _padded_mean(idxs):
@@ -421,7 +430,7 @@ def _make_residual_table(residuals: List[np.ndarray], flags: List[bool]) -> Opti
         ])
         return np.nanmean(arr, axis=0)
 
-    mean_correct   = _padded_mean(correct_idxs)
+    mean_correct = _padded_mean(correct_idxs)
     mean_incorrect = _padded_mean(incorrect_idxs)
 
     table = wandb.Table(columns=["step", "correct_mean_residual", "incorrect_mean_residual"])
@@ -447,16 +456,16 @@ def _save_wandb(fig, save_dir: str, filename: str) -> Optional[wandb.Image]:
 
 def _plot_pca_split(proj, sample_ids, flags, pca, save_dir, n_show=60):
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-    correct_local   = [i for i, f in enumerate(flags) if f]
+    correct_local = [i for i, f in enumerate(flags) if f]
     incorrect_local = [i for i, f in enumerate(flags) if not f]
 
     for ax, local_idxs, color, title in [
-        (axes[0], correct_local[:n_show],   "steelblue", "Correct"),
-        (axes[1], incorrect_local[:n_show], "firebrick",  "Incorrect"),
+        (axes[0], correct_local[:n_show], "steelblue", "Correct"),
+        (axes[1], incorrect_local[:n_show], "firebrick", "Incorrect"),
     ]:
         for li in local_idxs:
-            pts    = proj[sample_ids == li]
-            T      = pts.shape[0]
+            pts = proj[sample_ids == li]
+            T = pts.shape[0]
             alphas = np.linspace(0.2, 1.0, max(T, 2))
             for t in range(T - 1):
                 ax.plot(pts[t:t+2, 0], pts[t:t+2, 1],
@@ -477,8 +486,8 @@ def _plot_pca_combined(proj, sample_ids, flags, pca, save_dir, n_show=80):
     fig, ax = plt.subplots(figsize=(8, 7))
     for li, is_correct in enumerate(flags[:n_show]):
         color = "steelblue" if is_correct else "firebrick"
-        pts   = proj[sample_ids == li]
-        T     = pts.shape[0]
+        pts = proj[sample_ids == li]
+        T = pts.shape[0]
         alphas = np.linspace(0.15, 0.7, max(T, 2))
         for t in range(T - 1):
             ax.plot(pts[t:t+2, 0], pts[t:t+2, 1],
@@ -487,7 +496,7 @@ def _plot_pca_combined(proj, sample_ids, flags, pca, save_dir, n_show=80):
 
     legend_elements = [
         Line2D([0], [0], color="steelblue", lw=2, label="Correct"),
-        Line2D([0], [0], color="firebrick",  lw=2, label="Incorrect"),
+        Line2D([0], [0], color="firebrick", lw=2, label="Incorrect"),
         Line2D([0], [0], color="gray", lw=0, marker="*", markersize=8, label="Final step"),
     ]
     ax.legend(handles=legend_elements, fontsize=10)
@@ -514,13 +523,13 @@ def _plot_forward_residual(residuals, flags, save_dir):
         arr = np.array(padded)
         return np.nanmean(arr, axis=0), np.nanstd(arr, axis=0)
 
-    correct_idxs   = [i for i, f in enumerate(flags) if f]
+    correct_idxs = [i for i, f in enumerate(flags) if f]
     incorrect_idxs = [i for i, f in enumerate(flags) if not f]
-    steps          = np.arange(1, max_T + 1)
+    steps = np.arange(1, max_T + 1)
 
     fig, ax = plt.subplots(figsize=(9, 4))
     for idxs, label, color in [
-        (correct_idxs,   "Correct",   "steelblue"),
+        (correct_idxs, "Correct", "steelblue"),
         (incorrect_idxs, "Incorrect", "firebrick"),
     ]:
         if not idxs:
@@ -539,7 +548,7 @@ def _plot_forward_residual(residuals, flags, save_dir):
 
 
 def _plot_pca_variance(pca, save_dir):
-    n   = len(pca.explained_variance_ratio_)
+    n = len(pca.explained_variance_ratio_)
     fig, axes = plt.subplots(1, 2, figsize=(10, 4))
     axes[0].bar(range(1, n + 1), pca.explained_variance_ratio_ * 100, color="steelblue")
     axes[0].set_xlabel("Principal Component")
@@ -612,6 +621,43 @@ def _plot_step0_vs_final(proj, sample_ids, flags, save_dir):
         ax.legend(fontsize=9)
         ax.grid(True, lw=0.3, alpha=0.5)
     plt.suptitle("z_H PCA: Step-0 vs Final step", fontsize=11)
+    plt.tight_layout()
+    return fig
+
+
+def _plot_hinit_vs_final(proj_inits, proj, sample_ids, flags, save_dir):
+    """H_init reset position (×) vs final step (★) for correct/incorrect."""
+    fig, ax = plt.subplots(figsize=(8, 7))
+
+    # H_init points colored by correct/incorrect
+    for li, is_correct in enumerate(flags):
+        color = "steelblue" if is_correct else "firebrick"
+        ax.scatter(proj_inits[li, 0], proj_inits[li, 1],
+                   color=color, s=25, alpha=0.3, marker="x", zorder=5)
+
+    # Final step, colored by correct/incorrect
+    for li, is_correct in enumerate(flags):
+        color = "steelblue" if is_correct else "firebrick"
+        pts = proj[sample_ids == li]
+        if pts.shape[0] == 0:
+            continue
+        ax.scatter(pts[-1, 0], pts[-1, 1],
+                   color=color, s=15, alpha=0.5, marker="*", zorder=3)
+
+    legend_elements = [
+        Line2D([0], [0], color="steelblue", lw=0, marker="x", markersize=9, alpha=0.4,
+               label="H_init → correct"),
+        Line2D([0], [0], color="firebrick", lw=0, marker="x", markersize=9, alpha=0.4,
+               label="H_init → incorrect"),
+        Line2D([0], [0], color="steelblue", lw=0, marker="*", markersize=9,
+               label="Final (correct)"),
+        Line2D([0], [0], color="firebrick", lw=0, marker="*", markersize=9,
+               label="Final (incorrect)"),
+    ]
+    ax.legend(handles=legend_elements, fontsize=10)
+    ax.set_title("H_init reset position vs Final step  (PCA space)", fontsize=12)
+    ax.set_xlabel("PC1"); ax.set_ylabel("PC2")
+    ax.grid(True, lw=0.3, alpha=0.5)
     plt.tight_layout()
     return fig
 
@@ -807,7 +853,7 @@ def evaluate(
             config.checkpoint_path or "checkpoints/z_analysis",
             f"z_analysis_step_{train_state.step}"
         )
-        run_z_analysis(z_collector, config, z_save_dir, rank, wandb_step=train_state.step)
+        run_z_analysis(z_collector, config, z_save_dir, rank, train_state, wandb_step=train_state.step)
 
     return reduced_metrics
 
