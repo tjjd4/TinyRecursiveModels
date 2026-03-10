@@ -224,15 +224,26 @@ class ZAnalysisCollector:
         self.trajectories  = []
         self.correct_flags = []
         self.residuals     = []
+        self.pos_residuals = []
+        self.given_masks   = []
 
         # Internal accumulation buffers keyed by puzzle index in a batch
         self._z_H_per_step_batch: List[List[np.ndarray]] = []  # reset each batch
+        self._z_H_pos_per_step_batch = []
         self._batch_open: bool = False
 
-    def begin_batch(self, batch_size: int):
+    def begin_batch(self, batch, config: EvalConfig):
         """Call once before the while-loop for each batch."""
+        batch_size = config.global_batch_size
         self._z_H_per_step_batch = [[] for _ in range(batch_size)]
+        self._z_H_pos_per_step_batch = [[] for _ in range(batch_size)]
         self._batch_open = True
+        inputs_np = batch["inputs"].cpu().numpy()   # (B, L_full)
+        self._given_masks_batch = []
+        for b in range(batch_size):
+            cell_inputs = inputs_np[b, config.arch.puzzle_emb_len:]   # (81,)
+            given = cell_inputs > 0                        # (81,) bool
+            self._given_masks_batch.append(given)
 
     def record_step(self, carry):
         """Call inside the while-loop after every model forward, passing the new carry."""
@@ -243,6 +254,7 @@ class ZAnalysisCollector:
         for b in range(z_H_cpu.shape[0]):
             # Mean-pool over sequence positions → (D,)  to save memory
             self._z_H_per_step_batch[b].append(z_H_cpu[b].mean(axis=0))
+            self._z_H_pos_per_step_batch[b].append(z_H_cpu[b])
 
     def end_batch(self, carry, labels, final_preds):
         """
@@ -274,6 +286,17 @@ class ZAnalysisCollector:
             else:
                 diffs = np.array([0.0])
             self.residuals.append(diffs)
+            pos_steps = self._z_H_pos_per_step_batch[b]   # list of (L, D)
+            if len(pos_steps) > 1:
+                pos_traj = np.stack(pos_steps, axis=0)     # (T, L, D)
+                # L2 norm over D，不做 mean-pool
+                pos_diffs = np.linalg.norm(
+                    np.diff(pos_traj, axis=0), axis=-1
+                ) / math.sqrt(pos_traj.shape[-1])          # (T-1, L)
+            else:
+                pos_diffs = np.zeros((1, pos_steps[0].shape[0]))
+            self.pos_residuals.append(pos_diffs)
+            self.given_masks.append(self._given_masks_batch[b])
 
         self._batch_open = False
 
@@ -288,7 +311,6 @@ def run_z_analysis(
     config: EvalConfig,
     save_dir: str,
     rank: int,
-    train_state: TrainState,
     wandb_step: int = 0,
 ):
     """Fit PCA, save all plots, and log everything to wandb. Only runs on rank 0."""
@@ -394,7 +416,8 @@ def run_z_analysis(
     wandb_log["z_analysis/displacement_hist"] = _save_wandb(_plot_displacement_hist(collector.trajectories, collector.correct_flags, save_dir), save_dir, "displacement_histogram.png")
     wandb_log["z_analysis/pca_step0_final"]   = _save_wandb(_plot_step0_vs_final(proj, sample_ids, sub_flags, save_dir),        save_dir, "pca_step0_vs_final.png")
     wandb_log["z_analysis/pca_hinit_final"]   = _save_wandb(_plot_hinit_vs_final(proj_inits, proj, sample_ids, sub_flags, save_dir), save_dir, "pca_hinit_vs_final.png")
-
+    wandb_log["z_analysis/pos_residual_heatmap"] = _save_wandb(_plot_pos_residual_heatmap(collector.pos_residuals, collector.given_masks, collector.correct_flags, puzzle_emb_len=config.arch.puzzle_emb_len), save_dir, "pos_residual_heatmap.png")
+    wandb_log["z_analysis/pos_residual_by_step"] = _save_wandb(_plot_pos_residual_by_step(collector.pos_residuals, collector.given_masks, collector.correct_flags, puzzle_emb_len=config.arch.puzzle_emb_len), save_dir, "pos_residual_by_step.png")
     # Drop None values (plots that returned None due to insufficient data)
     wandb_log = {k: v for k, v in wandb_log.items() if v is not None}
 
@@ -662,6 +685,152 @@ def _plot_hinit_vs_final(proj_inits, proj, sample_ids, flags, save_dir):
     return fig
 
 
+def _plot_pos_residual_heatmap(
+    pos_residuals: List[np.ndarray],   # per-puzzle (T-1, L_full)
+    given_masks: List[np.ndarray],     # per-puzzle (81,) bool
+    flags: List[bool],
+    puzzle_emb_len: int = 2,
+):
+    """
+    9x9 heatmap: each cell's average z_H residual (across steps and puzzles).
+    Left: correct puzzles, Right: incorrect puzzles.
+    Given cells are marked with black frames.
+    """
+    correct_idxs   = [i for i, f in enumerate(flags) if f]
+    incorrect_idxs = [i for i, f in enumerate(flags) if not f]
+
+    def _mean_grid(idxs):
+        """Average per-cell residual across all puzzles and steps, return (9, 9)."""
+        if not idxs:
+            return None, None
+        # For each puzzle: mean over steps → (L_full,), take cell part
+        cell_means = []
+        given_sum  = np.zeros(81, dtype=np.float32)
+        for i in idxs:
+            r = pos_residuals[i]                    # (T-1, L_full)
+            cell_r = r[:, puzzle_emb_len:puzzle_emb_len + 81]  # (T-1, 81)
+            cell_means.append(cell_r.mean(axis=0))  # (81,)
+            given_sum += given_masks[i].astype(np.float32)
+        arr = np.array(cell_means).mean(axis=0)     # (81,)
+        given_avg = given_sum / len(idxs)            # (81,) 0~1，majority vote
+        return arr.reshape(9, 9), (given_avg > 0.5).reshape(9, 9)
+
+    grid_c, given_c = _mean_grid(correct_idxs)
+    grid_i, given_i = _mean_grid(incorrect_idxs)
+
+    vmin = min(
+        g.min() for g in [grid_c, grid_i] if g is not None
+    )
+    vmax = max(
+        g.max() for g in [grid_c, grid_i] if g is not None
+    )
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    for ax, grid, given, title in [
+        (axes[0], grid_c, given_c, f"Correct  (n={len(correct_idxs)})"),
+        (axes[1], grid_i, given_i, f"Incorrect  (n={len(incorrect_idxs)})"),
+    ]:
+        if grid is None:
+            ax.set_title(f"{title}\n(no data)")
+            continue
+        im = ax.imshow(grid, vmin=vmin, vmax=vmax, cmap="hot_r", aspect="equal")
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+        # given cell are marked as black
+        if given is not None:
+            for r in range(9):
+                for c in range(9):
+                    if given[r, c]:
+                        rect = plt.Rectangle(
+                            (c - 0.5, r - 0.5), 1, 1,
+                            linewidth=1.5, edgecolor="black", facecolor="none"
+                        )
+                        ax.add_patch(rect)
+
+        # 3x3 box
+        for line in [2.5, 5.5]:
+            ax.axhline(line, color="white", lw=1.5)
+            ax.axvline(line, color="white", lw=1.5)
+
+        ax.set_title(title, fontsize=11)
+        ax.set_xticks(range(9))
+        ax.set_yticks(range(9))
+
+    plt.suptitle(
+        "z_H Per-Cell Mean Residual  (averaged over steps & puzzles)\n"
+        "Black border = given cell,  Bright = high activity",
+        fontsize=11
+    )
+    plt.tight_layout()
+    return fig
+
+
+def _plot_pos_residual_by_step(
+    pos_residuals: List[np.ndarray],
+    given_masks: List[np.ndarray],
+    flags: List[bool],
+    puzzle_emb_len: int = 2,
+):
+    """
+    Line plot: average residual of given cells vs empty cells as step changes.
+    Each draws two lines for correct and incorrect (four lines in total).
+    """
+    correct_idxs   = [i for i, f in enumerate(flags) if f]
+    incorrect_idxs = [i for i, f in enumerate(flags) if not f]
+
+    max_T = max(r.shape[0] for r in pos_residuals) if pos_residuals else 0
+    if max_T == 0:
+        return None
+
+    def _given_empty_mean_by_step(idxs):
+        """
+        Return (max_T, 2): [:, 0] = given mean, [:, 1] = empty mean
+        """
+        if not idxs:
+            return None
+        given_steps  = [[] for _ in range(max_T)]
+        empty_steps  = [[] for _ in range(max_T)]
+        for i in idxs:
+            r     = pos_residuals[i]                              # (T-1, L_full)
+            cells = r[:, puzzle_emb_len:puzzle_emb_len + 81]     # (T-1, 81)
+            gm    = given_masks[i]                                # (81,) bool
+            T     = cells.shape[0]
+            for t in range(max_T):
+                if t < T:
+                    given_steps[t].extend(cells[t, gm].tolist())
+                    empty_steps[t].extend(cells[t, ~gm].tolist())
+        given_mean = np.array([np.mean(v) if v else np.nan for v in given_steps])
+        empty_mean = np.array([np.mean(v) if v else np.nan for v in empty_steps])
+        return np.stack([given_mean, empty_mean], axis=1)   # (max_T, 2)
+
+    res_c = _given_empty_mean_by_step(correct_idxs)
+    res_i = _given_empty_mean_by_step(incorrect_idxs)
+
+    steps = np.arange(1, max_T + 1)
+    fig, ax = plt.subplots(figsize=(9, 4))
+
+    styles = {
+        ("correct",   "given"): ("steelblue", "-",  "Correct / Given"),
+        ("correct",   "empty"): ("steelblue", "--", "Correct / Empty"),
+        ("incorrect", "given"): ("firebrick",  "-",  "Incorrect / Given"),
+        ("incorrect", "empty"): ("firebrick",  "--", "Incorrect / Empty"),
+    }
+    for (group, cell_type), (color, ls, label) in styles.items():
+        res = res_c if group == "correct" else res_i
+        if res is None:
+            continue
+        col = 0 if cell_type == "given" else 1
+        ax.plot(steps, res[:, col], color=color, linestyle=ls, lw=2, label=label)
+
+    ax.set_xlabel("Supervision Step Index #", fontsize=11)
+    ax.set_ylabel("||z_H[t] - z_H[t-1]|| / sqrt(D)  (per cell)", fontsize=10)
+    ax.set_title("z_H Per-Cell Residual: Given vs Empty Cells", fontsize=12)
+    ax.legend(fontsize=10)
+    ax.grid(True, lw=0.3, alpha=0.5)
+    plt.tight_layout()
+    return fig
+
+
 def _save(fig, save_dir, filename):
     """Legacy helper kept for compatibility. Prefer _save_wandb."""
     path = os.path.join(save_dir, filename)
@@ -732,8 +901,7 @@ def evaluate(
                 and z_batches_collected < config.z_analysis_max_batches
             )
             if collect_this_batch:
-                B = batch["inputs"].shape[0]
-                z_collector.begin_batch(B)
+                z_collector.begin_batch(batch, config)
 
             # Forward
             inference_steps = 0
