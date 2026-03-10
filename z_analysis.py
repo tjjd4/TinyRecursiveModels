@@ -311,6 +311,7 @@ def run_z_analysis(
     config: EvalConfig,
     save_dir: str,
     rank: int,
+    train_state: TrainState,
     wandb_step: int = 0,
 ):
     """Fit PCA, save all plots, and log everything to wandb. Only runs on rank 0."""
