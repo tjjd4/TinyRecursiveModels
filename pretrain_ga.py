@@ -565,7 +565,7 @@ def load_synced_config(hydra_config: DictConfig, rank: int, world_size: int) -> 
     return objects[0]  # type: ignore
 
 
-@hydra.main(config_path="config", config_name="cfg_pretrain", version_base=None)
+@hydra.main(config_path="config", config_name="cfg_pretrain_ga", version_base=None)
 def launch(hydra_config: DictConfig):
     RANK = 0
     WORLD_SIZE = 1
