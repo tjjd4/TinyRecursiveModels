@@ -7,7 +7,7 @@ import pydantic
 import torch
 from torch.utils.data import IterableDataset, get_worker_info
 
-from models.losses import IGNORE_LABEL_ID
+from models.losses.loss_fn import IGNORE_LABEL_ID
 from dataset.common import PuzzleDatasetMetadata
 
 from argdantic import ArgParser

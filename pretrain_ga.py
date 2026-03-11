@@ -1,4 +1,4 @@
-from typing import Optional, Any, Sequence, List
+from typing import Optional, Any, Sequence, List, Dict
 from dataclasses import dataclass
 import os
 import math
@@ -52,6 +52,7 @@ class PretrainConfig(pydantic.BaseModel):
 
     # Hyperparams
     global_batch_size: int
+    micro_batch_size: Optional[int] = None  # For gradient accumulation, None means use global_batch_size
     epochs: int
 
     lr: float
@@ -93,6 +94,9 @@ class TrainState:
     step: int
     total_steps: int
 
+    # [Gradient Accumulation] accumulator for metrics across micro batches
+    accumulated_metrics: Optional[Dict[str, float]] = None
+
 
 def create_dataloader(config: PretrainConfig, split: str, rank: int, world_size: int, **kwargs):
     dataset = PuzzleDataset(PuzzleDatasetConfig(
@@ -116,7 +120,8 @@ def create_dataloader(config: PretrainConfig, split: str, rank: int, world_size:
 def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, rank: int, world_size: int):
     model_cfg = dict(
         **config.arch.__pydantic_extra__,  # type: ignore
-        batch_size=config.global_batch_size // world_size,
+        # [Gradient Accumulation] use micro_batch_size if provided, else use global_batch_size
+        batch_size=(config.micro_batch_size if config.micro_batch_size is not None else config.global_batch_size) // world_size,
         vocab_size=train_metadata.vocab_size,
         seq_len=train_metadata.seq_len,
         num_puzzle_identifiers=train_metadata.num_puzzle_identifiers,
@@ -286,8 +291,11 @@ def create_evaluators(config: PretrainConfig, eval_metadata: PuzzleDatasetMetada
 
     return evaluators
 
-def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, global_batch_size: int, rank: int, world_size: int):
-    train_state.step += 1
+# [Gradient Accumulation] add parameter `is_update_step` to indicate whether this is a true update step
+def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, global_batch_size: int, rank: int, world_size: int, is_update_step: bool = True):
+    # [Gradient Accumulation] count step only when true update (after gradient accumulation)
+    if is_update_step:
+        train_state.step += 1
     if train_state.step > train_state.total_steps:  # At most train_total_steps
         return
 
@@ -302,45 +310,70 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
     # Forward
     train_state.carry, loss, metrics, _, _ = train_state.model(carry=train_state.carry, batch=batch, return_keys=[])
 
-    ((1 / global_batch_size) * loss).backward()
+    # [Gradient Accumulation] divide loss by the real global batch size
+    ((1 / config.global_batch_size) * loss).backward()
 
-    # Allreduce
-    if world_size > 1:
-        for param in train_state.model.parameters():
-            if param.grad is not None:
-                dist.all_reduce(param.grad)
-            
-    # Apply optimizer
-    lr_this_step = None    
-    for optim, base_lr in zip(train_state.optimizers, train_state.optimizer_lrs):
-        lr_this_step = compute_lr(base_lr, config, train_state)
-
-        for param_group in optim.param_groups:
-            param_group['lr'] = lr_this_step
-            
-        optim.step()
-        optim.zero_grad()
-
-    # Reduce metrics
-    if len(metrics):
+    # [Gradient Accumulation] accumulate metrics
+    if metrics:
         assert not any(v.requires_grad for v in metrics.values())
-
+        
         metric_keys = list(sorted(metrics.keys()))  # Sort keys to guarantee all processes use the same order.
         # Reduce and reconstruct
         metric_values = torch.stack([metrics[k] for k in metric_keys])
+        if not train_state.accumulated_metrics:
+            train_state.accumulated_metrics = {}
+            for i, k in enumerate(metric_keys):
+                train_state.accumulated_metrics[k] = metric_values[i].clone()
+        else:
+            for i, k in enumerate(metric_keys):
+                train_state.accumulated_metrics[k] += metric_values[i]
+    
+    reduced_metrics = None
+
+    # [Gradient Accumulation] only update on true update step
+    if is_update_step:
+        # Allreduce
         if world_size > 1:
-            dist.reduce(metric_values, dst=0)
+            for param in train_state.model.parameters():
+                if param.grad is not None:
+                    dist.all_reduce(param.grad)
+                
+        # Apply optimizer
+        lr_this_step = None 
+        for optim, base_lr in zip(train_state.optimizers, train_state.optimizer_lrs):
+            lr_this_step = compute_lr(base_lr, config, train_state)
 
-        if rank == 0:
-            metric_values = metric_values.cpu().numpy()
-            reduced_metrics = {k: metric_values[i] for i, k in enumerate(metric_keys)}
-            
-            # Postprocess
-            count = max(reduced_metrics["count"], 1)  # Avoid NaNs
-            reduced_metrics = {f"train/{k}": v / (global_batch_size if k.endswith("loss") else count) for k, v in reduced_metrics.items()}
+            for param_group in optim.param_groups:
+                param_group['lr'] = lr_this_step
+                
+            optim.step()
+            optim.zero_grad()
 
-            reduced_metrics["train/lr"] = lr_this_step
-            return reduced_metrics
+        # Reduce metrics
+        # [Gradient Accumulation] use accumulated metrics to stand for all micro batch metrics
+        if train_state.accumulated_metrics:
+            assert not any(v.requires_grad for v in train_state.accumulated_metrics.values())
+
+            metric_keys = list(sorted(train_state.accumulated_metrics.keys()))  # Sort keys to guarantee all processes use the same order.
+            # Reduce and reconstruct
+            metric_values = torch.stack([train_state.accumulated_metrics[k] for k in metric_keys])
+            if world_size > 1:
+                dist.reduce(metric_values, dst=0)
+
+            if rank == 0:
+                metric_values = metric_values.cpu().numpy()
+                reduced_metrics = {k: metric_values[i] for i, k in enumerate(metric_keys)}
+                
+                # Postprocess
+                count = max(reduced_metrics["count"], 1)  # Avoid NaNs
+                # [Gradient Accumulation] use `config.global_batch_size` to make sure divide by the correct global batch size
+                reduced_metrics = {f"train/{k}": v / (config.global_batch_size if k.endswith("loss") else count) for k, v in reduced_metrics.items()}
+
+                reduced_metrics["train/lr"] = lr_this_step
+        # [Gradient Accumulation] reset accumulated metrics on update step
+        train_state.accumulated_metrics = None
+    # [Gradient Accumulation] Non-update steps return None for metrics
+    return reduced_metrics
 
 def evaluate(
     config: PretrainConfig,
@@ -532,7 +565,7 @@ def load_synced_config(hydra_config: DictConfig, rank: int, world_size: int) -> 
     return objects[0]  # type: ignore
 
 
-@hydra.main(config_path="config", config_name="cfg_pretrain", version_base=None)
+@hydra.main(config_path="config", config_name="cfg_pretrain_ga", version_base=None)
 def launch(hydra_config: DictConfig):
     RANK = 0
     WORLD_SIZE = 1
@@ -557,6 +590,16 @@ def launch(hydra_config: DictConfig):
     # Load sync'ed config
     config = load_synced_config(hydra_config, rank=RANK, world_size=WORLD_SIZE)
 
+    # [Gradient Accumulation] parameters for gradient accumulation
+    BATCH_SIZE = config.micro_batch_size if config.micro_batch_size is not None else config.global_batch_size
+    ACCUMULATION_STEPS = max(1, config.global_batch_size // BATCH_SIZE)
+    
+    if RANK == 0:
+        print(f"Gradient Accumulation Enabled:")
+        print(f"  Target Global Batch Size: {config.global_batch_size}")
+        print(f"  Actual Batch Size : {BATCH_SIZE}")
+        print(f"  Accumulation Steps      : {ACCUMULATION_STEPS}")
+
     # Seed RNGs to ensure consistency
     torch.random.manual_seed(config.seed + RANK)
 
@@ -566,9 +609,9 @@ def launch(hydra_config: DictConfig):
 
     assert config.epochs % train_epochs_per_iter == 0, "Eval interval must be a divisor of total epochs."
 
-    train_loader, train_metadata = create_dataloader(config, "train", test_set_mode=False, epochs_per_iter=train_epochs_per_iter, global_batch_size=config.global_batch_size, rank=RANK, world_size=WORLD_SIZE)
+    train_loader, train_metadata = create_dataloader(config, "train", test_set_mode=False, epochs_per_iter=train_epochs_per_iter, global_batch_size=BATCH_SIZE, rank=RANK, world_size=WORLD_SIZE)
     try:
-        eval_loader,  eval_metadata  = create_dataloader(config, "test", test_set_mode=True, epochs_per_iter=1, global_batch_size=config.global_batch_size, rank=RANK, world_size=WORLD_SIZE)
+        eval_loader,  eval_metadata  = create_dataloader(config, "test", test_set_mode=True, epochs_per_iter=1, global_batch_size=BATCH_SIZE, rank=RANK, world_size=WORLD_SIZE)
     except:
         print("NO EVAL DATA FOUND")
         eval_loader = eval_metadata = None
@@ -596,6 +639,9 @@ def launch(hydra_config: DictConfig):
         ema_helper.register(train_state.model)
 
     # Training Loop
+    # [Gradient Accumulation] micro step counter for gradient accumulation
+    micro_step_counter = 0
+
     for _iter_id in range(total_iters):
         print (f"[Rank {RANK}, World Size {WORLD_SIZE}]: Epoch {_iter_id * train_epochs_per_iter}")
 
@@ -603,13 +649,22 @@ def launch(hydra_config: DictConfig):
         if RANK == 0:
             print("TRAIN")
         train_state.model.train()
+
+        # [Gradient Accumulation] loop over train_loader with micro batches; current value of `global_batch_size` is `MICRO_BATCH_SIZE`
         for set_name, batch, global_batch_size in train_loader:
-            metrics = train_batch(config, train_state, batch, global_batch_size, rank=RANK, world_size=WORLD_SIZE)
+
+            # [Gradient Accumulation] increment micro step counter and determine if this is an update step
+            micro_step_counter += 1
+            is_update_step = (micro_step_counter % ACCUMULATION_STEPS == 0)
+            # [Gradient Accumulation] pass boolean flag `is_update_step` to train_batch to indicate whether this is a true update step
+            metrics = train_batch(config, train_state, batch, global_batch_size, rank=RANK, world_size=WORLD_SIZE, is_update_step=is_update_step)
 
             if RANK == 0 and metrics is not None:
                 wandb.log(metrics, step=train_state.step)
                 progress_bar.update(train_state.step - progress_bar.n)  # type: ignore
-            if config.ema:
+            
+            # [Gradient Accumulation] only update EMA on true update step
+            if is_update_step and config.ema:
                 ema_helper.update(train_state.model)
 
         if _iter_id >= config.min_eval_interval:

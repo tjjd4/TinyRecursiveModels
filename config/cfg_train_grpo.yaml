@@ -1,0 +1,50 @@
+# ARC training config
+
+defaults:
+  - arch: trm_grpo_os
+  - _self_
+
+hydra:
+  output_subdir: null
+
+load_checkpoint: ""
+
+# Data path
+data_paths: ['data/arc-aug-1000']
+data_paths_test: []
+
+evaluators:
+  - name: arc@ARC
+
+# Hyperparams - Training
+global_batch_size: 64
+micro_batch_size: 4
+eval_batch_size: 64
+
+epochs: 1000
+eval_interval: 100
+checkpoint_every_eval: True
+
+lr: 1e-6
+lr_min_ratio: 1.0
+lr_warmup_steps: 2000
+
+# Standard hyperparameter settings for LM, as used in Llama
+beta1: 0.9
+beta2: 0.95
+weight_decay: 0.1
+puzzle_emb_weight_decay: 0.1
+
+# Hyperparams - Puzzle embeddings training
+puzzle_emb_lr: 1e-6
+
+seed: 0
+min_eval_interval: 0 # when to start the eval
+
+# Hyperparams - GRPO
+num_generations: 8
+
+ema: False # use Exponential-Moving-Average
+ema_rate: 0.999 # EMA-rate
+freeze_weights: False # If True, freeze weights and only learn the embeddings
+freeze_backbone: False # If True, freeze backbone (puzzle embeddings and model weights without q_head)

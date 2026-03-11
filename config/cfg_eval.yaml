@@ -1,0 +1,27 @@
+# Test config for model evaluation
+
+defaults:
+  - arch: trm
+  - _self_
+
+eval_loss:
+  name: losses.eval_loss@EvalLossHead
+
+hydra:
+  output_subdir: null
+
+# Model checkpoint path
+load_checkpoint: ""
+
+# Data path
+data_paths: ['data/arc-aug-1000']
+data_paths_test: []
+
+evaluators:
+  - name: arc@ARC
+
+# Hyperparams - Training
+global_batch_size: 768
+
+# Inference parameters
+seed: 0

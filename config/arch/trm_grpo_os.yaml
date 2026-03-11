@@ -1,0 +1,40 @@
+name: recursive_reasoning.trm_grpo@TinyRecursiveReasoningModel_GRPO
+loss:
+  name: losses.grpo_os_loss@GRPOOSLossHead
+  num_generations: ${num_generations}
+  entropy_halt_bonus: 0.01
+  entropy_token_bonus: 0.001
+  kl_halt_beta: 0.005
+  kl_token_beta: 0.02
+  reward:
+    name: losses.rewards.default_reward@DefaultReward
+    num_generations: ${num_generations}
+    correct_reward: 1.0
+    len_penalty: 0.01
+    len_reward: 0.1
+    p_cutoff: 0.9
+
+halt_exploration_prob: 0.1  # no used in RL (only used in ACT, save for compatibility)
+halt_max_steps: 16
+
+temperature: 0.7    # 1.0 = no scaling, <1 more greedy, >1 more random
+top_p: 0.9          # 1.0 = no nucleus sampling, <1 enable top-p filtering
+
+H_cycles: 3
+L_cycles: 6
+
+H_layers: 0
+L_layers: 2
+
+hidden_size: 512
+num_heads: 8  # min(2, hidden_size // 64)
+expansion: 4
+
+puzzle_emb_ndim: ${.hidden_size}
+
+pos_encodings: rope
+forward_dtype: bfloat16
+
+mlp_t: False # use mlp on L instead of transformer
+puzzle_emb_len: 16 # if non-zero, its specified to this value
+no_ACT_continue: True # No continue ACT loss, only use the sigmoid of the halt which makes much more sense

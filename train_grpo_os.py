@@ -1,10 +1,11 @@
-from typing import Optional, Any, Sequence, List
+from typing import Optional, Any, Sequence, List, Dict
 from dataclasses import dataclass
 import os
 import math
 import yaml
 import shutil
 import copy
+import numpy as np
 
 import torch
 import torch.distributed as dist
@@ -24,10 +25,14 @@ from utils.functions import load_model_class, get_model_source_path
 from models.sparse_embedding import CastedSparseEmbeddingSignSGD_Distributed
 from models.ema import EMAHelper
 
+class RewardConfig(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra='allow')
+    name: str
 
 class LossConfig(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra='allow')
     name: str
+    reward: RewardConfig
 
 
 class ArchConfig(pydantic.BaseModel):
@@ -41,7 +46,7 @@ class EvaluatorConfig(pydantic.BaseModel):
     name: str
 
 
-class PretrainConfig(pydantic.BaseModel):
+class TrainRLConfig(pydantic.BaseModel):
     # Config
     arch: ArchConfig
     # Data
@@ -52,6 +57,8 @@ class PretrainConfig(pydantic.BaseModel):
 
     # Hyperparams
     global_batch_size: int
+    micro_batch_size: Optional[int] = None  # For gradient accumulation, None means use global_batch_size
+    eval_batch_size: int
     epochs: int
 
     lr: float
@@ -66,9 +73,14 @@ class PretrainConfig(pydantic.BaseModel):
     puzzle_emb_lr: float
     puzzle_emb_weight_decay: float
 
+    # Hyperparams - GRPO
+    num_generations: int
+
     # Names
     project_name: Optional[str] = None
     run_name: Optional[str] = None
+
+    # Load checkpoint from pretrain
     load_checkpoint: Optional[str] = None
     checkpoint_path: Optional[str] = None
 
@@ -82,6 +94,7 @@ class PretrainConfig(pydantic.BaseModel):
     ema: bool = False # use Exponential-Moving-Average
     ema_rate: float = 0.999 # EMA-rate
     freeze_weights: bool = False # If True, freeze weights and only learn the embeddings
+    freeze_backbone: bool = False # If True, freeze backbone
 
 @dataclass
 class TrainState:
@@ -93,8 +106,11 @@ class TrainState:
     step: int
     total_steps: int
 
+    # [Gradient Accumulation] accumulator for metrics across micro batches
+    accumulated_metrics: Optional[Dict[str, float]] = None
 
-def create_dataloader(config: PretrainConfig, split: str, rank: int, world_size: int, **kwargs):
+
+def create_dataloader(config: TrainRLConfig, split: str, rank: int, world_size: int, **kwargs):
     dataset = PuzzleDataset(PuzzleDatasetConfig(
         seed=config.seed,
         dataset_paths=config.data_paths_test if len(config.data_paths_test)>0 and split=="test" else config.data_paths,
@@ -113,14 +129,23 @@ def create_dataloader(config: PretrainConfig, split: str, rank: int, world_size:
     return dataloader, dataset.metadata
 
 
-def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, rank: int, world_size: int):
+def create_model(config: TrainRLConfig, train_metadata: PuzzleDatasetMetadata, rank: int, world_size: int):
     model_cfg = dict(
         **config.arch.__pydantic_extra__,  # type: ignore
-        batch_size=config.global_batch_size // world_size,
+        # [Gradient Accumulation] use micro_batch_size if provided, else use global_batch_size
+        batch_size=(config.micro_batch_size if config.micro_batch_size is not None else config.global_batch_size) * config.num_generations // world_size,
         vocab_size=train_metadata.vocab_size,
         seq_len=train_metadata.seq_len,
         num_puzzle_identifiers=train_metadata.num_puzzle_identifiers,
         causal=False  # Non-autoregressive
+    )
+
+    loss_cfg = dict(
+        **config.arch.loss.__pydantic_extra__,
+        reward=dict(
+            **config.arch.loss.reward.__pydantic_extra__,
+            name=config.arch.loss.reward.name,
+        )
     )
 
     # Instantiate model with loss head
@@ -130,7 +155,8 @@ def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, 
     with torch.device("cuda"):
         model: nn.Module = model_cls(model_cfg)
         print(model)
-        model = loss_head_cls(model, **config.arch.loss.__pydantic_extra__)  # type: ignore
+        # Pass RL config parameters to loss head
+        model = loss_head_cls(model, loss_cfg)  # type: ignore
         if "DISABLE_COMPILE" not in os.environ:
             model = torch.compile(model)  # type: ignore
 
@@ -143,6 +169,11 @@ def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, 
             with torch.no_grad():
                 for param in list(model.parameters()) + list(model.buffers()):
                     dist.broadcast(param, src=0)
+
+    # [TODO] Refactor to fix design flaw: Should not need to init ref model manually here (in train_rl.py), 
+    # ref model is for GRPO KL penalty, and should be in the loss head.
+    # Create frozen ref_model AFTER checkpoint is loaded (so deepcopy gets correct weights)
+    model.init_ref_model()
 
     # Optimizers and lr
     if config.arch.puzzle_emb_ndim == 0:
@@ -158,6 +189,10 @@ def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, 
             config.lr
         ]
     elif config.freeze_weights:
+        for param in model.parameters():
+            param.requires_grad = False
+        print(" -> All params frozen successfully.")
+
         optimizers = [
             CastedSparseEmbeddingSignSGD_Distributed(
                 model.model.puzzle_emb.buffers(),  # type: ignore
@@ -169,7 +204,33 @@ def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, 
         optimizer_lrs = [
             config.puzzle_emb_lr
         ]
+    elif config.freeze_backbone:
+        for param in model.parameters():
+            param.requires_grad = False
+        try:
+            # unfreeze q_head
+            for param in model.model.inner.q_head.parameters():
+                param.requires_grad = True
+            # with torch.no_grad():
+            #     model.model.inner.q_head.weight.zero_()
+            #     model.model.inner.q_head.bias.fill_(-5)
+            print(" -> Q-Head unfrozen successfully.")
+        except AttributeError as e:
+            print(f"Error unfreezing Q-Head: {e}")
+            exit(1)
+        optimizers = [
+            AdamATan2(
+                model.model.inner.q_head.parameters(),
+                lr=0,  # Needs to be set by scheduler
+                weight_decay=config.weight_decay,
+                betas=(config.beta1, config.beta2)
+            )
+        ]
+        optimizer_lrs = [
+            config.lr
+        ]
     else:
+        print(" -> All params enabled.")
         optimizers = [
             CastedSparseEmbeddingSignSGD_Distributed(
                 model.model.puzzle_emb.buffers(),  # type: ignore
@@ -191,18 +252,6 @@ def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, 
 
     return model, optimizers, optimizer_lrs
 
-def mix_weights_direct(device, alpha, net, nets):
-    sd = []
-    for i in range(len(nets)):
-        sd += [nets[i].state_dict()]
-    sd_alpha = {}
-    for k in sd[0].keys():
-        comb_net = alpha[0]*sd[0][k].to(device)
-        for i in range(1,len(nets)):
-            comb_net += alpha[i]*sd[i][k].to(device)
-        sd_alpha[k] =  comb_net
-    net.load_state_dict(sd_alpha)
-    return net
 
 def cosine_schedule_with_warmup_lr_lambda(
     current_step: int, *, base_lr: float, num_warmup_steps: int, num_training_steps: int, min_ratio: float = 0.0, num_cycles: float = 0.5
@@ -214,7 +263,7 @@ def cosine_schedule_with_warmup_lr_lambda(
     return base_lr * (min_ratio + max(0.0, (1 - min_ratio) * 0.5 * (1.0 + math.cos(math.pi * float(num_cycles) * 2.0 * progress))))
 
 
-def init_train_state(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, rank: int, world_size: int):
+def init_train_state(config: TrainRLConfig, train_metadata: PuzzleDatasetMetadata, rank: int, world_size: int):
     # Estimated total training steps
     total_steps = int(config.epochs * train_metadata.total_groups * train_metadata.mean_puzzle_examples / config.global_batch_size)
 
@@ -224,16 +273,14 @@ def init_train_state(config: PretrainConfig, train_metadata: PuzzleDatasetMetada
     return TrainState(
         step=0,
         total_steps=total_steps,
-
         model=model,
         optimizers=optimizers,
         optimizer_lrs=optimizer_lrs,
-        carry=None
+        carry=None,
     )
 
 
-def save_train_state(config: PretrainConfig, train_state: TrainState):
-    # FIXME: Only saved model.
+def save_train_state(config: TrainRLConfig, train_state: TrainState):
     if config.checkpoint_path is None:
         return
 
@@ -241,8 +288,8 @@ def save_train_state(config: PretrainConfig, train_state: TrainState):
     torch.save(train_state.model.state_dict(), os.path.join(config.checkpoint_path, f"step_{train_state.step}"))
 
 
-def load_checkpoint(model: nn.Module, config: PretrainConfig):
-    if config.load_checkpoint is not None:
+def load_checkpoint(model: nn.Module, config: TrainRLConfig):
+    if config.load_checkpoint is not None and config.load_checkpoint != "":
         print(f"Loading checkpoint {config.load_checkpoint}")
 
         # Load state dict
@@ -259,10 +306,20 @@ def load_checkpoint(model: nn.Module, config: PretrainConfig):
                 state_dict[puzzle_emb_name] = (
                     torch.mean(puzzle_emb, dim=0, keepdim=True).expand(expected_shape).contiguous()
                 )
-        model.load_state_dict(state_dict, assign=True)
+        missing, unexpected = model.load_state_dict(state_dict, strict=False, assign=True)
+
+        if len(missing):
+            print(f"[train_rl.py] Missing keys (ok if head changed): {len(missing)}")
+            # print first few
+            for k in missing[:20]:
+                print("  missing:", k)
+        if len(unexpected):
+            print(f"[train_rl.py] Unexpected keys (ok if old head existed): {len(unexpected)}")
+            for k in unexpected[:20]:
+                print("  unexpected:", k)
 
 
-def compute_lr(base_lr: float, config: PretrainConfig, train_state: TrainState):
+def compute_lr(base_lr: float, config: TrainRLConfig, train_state: TrainState):
     return cosine_schedule_with_warmup_lr_lambda(
         current_step=train_state.step,
         base_lr=base_lr,
@@ -272,80 +329,119 @@ def compute_lr(base_lr: float, config: PretrainConfig, train_state: TrainState):
     )
 
 
-
-def create_evaluators(config: PretrainConfig, eval_metadata: PuzzleDatasetMetadata) -> List[Any]:
-    data_paths =config.data_paths_test if len(config.data_paths_test)>0 else config.data_paths
+def create_evaluators(config: TrainRLConfig, eval_metadata: PuzzleDatasetMetadata) -> List[Any]:
+    data_paths = config.data_paths_test if len(config.data_paths_test) > 0 else config.data_paths
     # Initialize evaluators
     evaluators = []
-    for cfg in config.evaluators:
-        for data_path in data_paths:
-            cls = load_model_class(cfg.name, "evaluators.")(
-                data_path=data_path, eval_metadata=eval_metadata, **cfg.__pydantic_extra__
-            )  # type: ignore
-            evaluators.append(cls)
+    if hasattr(config, 'evaluators'):
+        for cfg in config.evaluators:
+            for data_path in data_paths:
+                cls = load_model_class(cfg.name, "evaluators.")(
+                    data_path=data_path, eval_metadata=eval_metadata, **cfg.__pydantic_extra__
+                )  # type: ignore
+                evaluators.append(cls)
 
     return evaluators
 
-def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, global_batch_size: int, rank: int, world_size: int):
-    train_state.step += 1
+
+# [Gradient Accumulation] add parameter `is_update_step` to indicate whether this is a true update step
+def train_batch(config: TrainRLConfig, train_state: TrainState, batch: Any, global_batch_size: int, rank: int, world_size: int, is_update_step: bool = True):
+    # [Gradient Accumulation] count step only when true update (after gradient accumulation)
+    if is_update_step:
+        train_state.step += 1
     if train_state.step > train_state.total_steps:  # At most train_total_steps
         return
 
     # To device
     batch = {k: v.cuda() for k, v in batch.items()}
 
+    expanded_batch = train_state.model.expand_batch(batch, config.num_generations)
+
     # Init carry if it is None
     if train_state.carry is None:
         with torch.device("cuda"):
-            train_state.carry = train_state.model.initial_carry(batch)  # type: ignore
+            train_state.carry = train_state.model.initial_carry(expanded_batch)  # type: ignore
 
-    # Forward
-    train_state.carry, loss, metrics, _, _ = train_state.model(carry=train_state.carry, batch=batch, return_keys=[])
+    while True:
+        train_state.carry, loss, metrics, _, all_finish = train_state.model(carry=train_state.carry, batch=expanded_batch, return_keys=[])
 
-    ((1 / global_batch_size) * loss).backward()
+        if all_finish:
+            break
+    
+    # [Gradient Accumulation] divide loss by the real global batch size
+    ((1.0 / config.global_batch_size) * loss).backward()
 
-    # Allreduce
-    if world_size > 1:
-        for param in train_state.model.parameters():
-            if param.grad is not None:
-                dist.all_reduce(param.grad)
-            
-    # Apply optimizer
-    lr_this_step = None    
-    for optim, base_lr in zip(train_state.optimizers, train_state.optimizer_lrs):
-        lr_this_step = compute_lr(base_lr, config, train_state)
-
-        for param_group in optim.param_groups:
-            param_group['lr'] = lr_this_step
-            
-        optim.step()
-        optim.zero_grad()
-
-    # Reduce metrics
-    if len(metrics):
+    # [Gradient Accumulation] accumulate metrics
+    if metrics:
         assert not any(v.requires_grad for v in metrics.values())
-
+        
         metric_keys = list(sorted(metrics.keys()))  # Sort keys to guarantee all processes use the same order.
         # Reduce and reconstruct
         metric_values = torch.stack([metrics[k] for k in metric_keys])
+        if not train_state.accumulated_metrics:
+            train_state.accumulated_metrics = {}
+            for i, k in enumerate(metric_keys):
+                train_state.accumulated_metrics[k] = metric_values[i].clone()
+        else:
+            for i, k in enumerate(metric_keys):
+                train_state.accumulated_metrics[k] += metric_values[i]
+
+    reduced_metrics = None
+
+    # [Gradient Accumulation] only update on true update step
+    if is_update_step:
+        # DDP allreduce grads
         if world_size > 1:
-            dist.reduce(metric_values, dst=0)
+            for p in train_state.model.parameters():
+                if p.grad is not None:
+                    dist.all_reduce(p.grad)
 
-        if rank == 0:
-            metric_values = metric_values.cpu().numpy()
-            reduced_metrics = {k: metric_values[i] for i, k in enumerate(metric_keys)}
-            
-            # Postprocess
-            count = max(reduced_metrics["count"], 1)  # Avoid NaNs
-            reduced_metrics = {f"train/{k}": v / (global_batch_size if k.endswith("loss") else count) for k, v in reduced_metrics.items()}
+        # Clip gradients (GRPO: To avoid exploding gradients)
+        grad_norm = torch.nn.utils.clip_grad_norm_(train_state.model.parameters(), max_norm=1, norm_type=2)
 
-            reduced_metrics["train/lr"] = lr_this_step
-            return reduced_metrics
+        # Apply optimizer
+        lr_this_step = None
+        for optim, base_lr in zip(train_state.optimizers, train_state.optimizer_lrs):
+            lr_this_step = compute_lr(base_lr, config, train_state)
+
+            for param_group in optim.param_groups:
+                param_group["lr"] = lr_this_step
+
+            optim.step()
+            optim.zero_grad()
+
+        # Reduce metrics to rank0
+        # [Gradient Accumulation] use accumulated metrics to stand for all micro batch metrics
+        if train_state.accumulated_metrics:
+            assert not any(v.requires_grad for v in train_state.accumulated_metrics.values())
+
+            metric_keys = list(sorted(train_state.accumulated_metrics.keys()))  # Sort keys to guarantee all processes use the same order.
+            # Reduce and reconstruct
+            metric_values = torch.stack([train_state.accumulated_metrics[k] for k in metric_keys])
+            if world_size > 1:
+                dist.reduce(metric_values, dst=0)
+
+            if rank == 0:
+                metric_values = metric_values.cpu().numpy()
+                reduced_metrics = {k: metric_values[i] for i, k in enumerate(metric_keys)}
+
+                # Postprocess
+                count = max(reduced_metrics["count"], 1)  # Avoid NaNs
+                # [Gradient Accumulation] use `config.global_batch_size` to make sure divide by the correct global batch size
+                reduced_metrics = {f"train/{k}": v / (config.global_batch_size if k.endswith("loss") else count) for k, v in reduced_metrics.items()}
+
+                reduced_metrics["train/lr"] = lr_this_step
+                reduced_metrics["train/grad_norm"] = grad_norm.detach().item()
+        # [Gradient Accumulation] reset accumulated metrics on update step
+        train_state.accumulated_metrics = None
+    # [Gradient Accumulation] Non-update steps return None for metrics
+    return reduced_metrics
+
 
 def evaluate(
-    config: PretrainConfig,
+    config: TrainRLConfig,
     train_state: TrainState,
-    eval_loader: torch.utils.data.DataLoader,
+    eval_loader: DataLoader,
     eval_metadata: PuzzleDatasetMetadata,
     evaluators: List[Any],
     rank: int,
@@ -370,6 +466,7 @@ def evaluate(
 
         carry = None
         processed_batches = 0
+        all_steps_list = []  # Accumulate steps from all batches
         
         for set_name, batch, global_batch_size in eval_loader:
             processed_batches += 1
@@ -378,6 +475,9 @@ def evaluate(
             
             # To device
             batch = {k: v.cuda() for k, v in batch.items()}
+            # No expand batch on evaluation
+            # expanded_batch = train_state.model.expand_batch(batch, config.num_generations)
+
             with torch.device("cuda"):
                 carry = train_state.model.initial_carry(batch)  # type: ignore
 
@@ -392,8 +492,10 @@ def evaluate(
                 if all_finish:
                     break
 
-            if rank == 0:
-                print(f"  Completed inference in {inference_steps} steps")
+            # Collect per-sample halt steps (accumulate across batches)
+            all_steps_list.append(carry.steps.detach().cpu())  # (batch_size,)
+            # if rank == 0:
+            #     print(f"  Completed inference in {inference_steps} steps")
 
             for collection in (batch, preds):
                 for k, v in collection.items():
@@ -454,6 +556,71 @@ def evaluate(
                     count = m.pop("count")
                     reduced_metrics[set_name] = {k: v / count for k, v in m.items()}
 
+        # Gather all_steps across all ranks to rank 0
+        all_steps = None
+        if all_steps_list:
+            all_steps_local = torch.cat(all_steps_list, dim=0).cuda()  # All samples on this rank
+            
+            if world_size > 1:
+                gathered = [torch.zeros_like(all_steps_local) for _ in range(world_size)]
+                dist.all_gather(gathered, all_steps_local)
+                all_steps = torch.cat(gathered, dim=0).cpu().numpy()
+            else:
+                all_steps = all_steps_local.cpu().numpy()
+
+            if rank == 0 and all_steps is not None:
+                
+                # Compute statistics
+                steps_min = int(all_steps.min())
+                steps_max = int(all_steps.max())
+                steps_mean = float(all_steps.mean())
+                steps_std = float(all_steps.std())
+                steps_p25 = float(np.percentile(all_steps, 25))
+                steps_p50 = float(np.percentile(all_steps, 50))
+                steps_p75 = float(np.percentile(all_steps, 75))
+                steps_p90 = float(np.percentile(all_steps, 90))
+                
+                # Value counts
+                unique, counts = np.unique(all_steps, return_counts=True)
+                step_dist = dict(zip(unique.tolist(), counts.tolist()))
+                
+                # Print to console
+                print(f"\n=== Per-Sample Steps Distribution ===")
+                print(f"  Total samples: {len(all_steps)}")
+                print(f"  Min: {steps_min}, Max: {steps_max}")
+                print(f"  Mean: {steps_mean:.2f}, Std: {steps_std:.2f}")
+                print(f"  Percentiles - 25%: {steps_p25:.0f}, 50%: {steps_p50:.0f}, 75%: {steps_p75:.0f}, 90%: {steps_p90:.0f}")
+                print(f"  Step distribution: {step_dist}")
+                print("======================================\n")
+                
+                # Log to wandb
+                if reduced_metrics is None:
+                    reduced_metrics = {}
+                step_dist_table = wandb.Table(
+                    columns=["eval_step", "step", "count"],
+                    data=[[train_state.step, k, v] for k, v in sorted(step_dist.items())]
+                )
+
+                reduced_metrics["eval/step_histogram"] = wandb.Histogram(all_steps, num_bins=16)
+
+                # Histogram for distribution visualization (grouped by eval_step)
+                reduced_metrics[f"eval/step_distribution_{train_state.step}"] = wandb.plot.bar(
+                    step_dist_table, "step", "count", title=f"Step Distribution (eval@{train_state.step})"
+                )
+                
+                # # Summary statistics
+                reduced_metrics["eval/steps_min"] = steps_min
+                reduced_metrics["eval/steps_max"] = steps_max
+                reduced_metrics["eval/steps_mean"] = steps_mean
+                reduced_metrics["eval/steps_std"] = steps_std
+                reduced_metrics["eval/steps_p25"] = steps_p25
+                reduced_metrics["eval/steps_p50"] = steps_p50
+                reduced_metrics["eval/steps_p75"] = steps_p75
+                reduced_metrics["eval/steps_p90"] = steps_p90
+
+
+        
+
         # Run evaluators
         if rank == 0:
             print(f"\nRunning {len(evaluators)} evaluator(s)...")
@@ -485,7 +652,8 @@ def evaluate(
 
     return reduced_metrics
 
-def save_code_and_config(config: PretrainConfig):
+
+def save_code_and_config(config: TrainRLConfig):
     if config.checkpoint_path is None or wandb.run is None:
         return
 
@@ -511,14 +679,14 @@ def save_code_and_config(config: PretrainConfig):
     wandb.run.log_code(config.checkpoint_path)
 
 
-def load_synced_config(hydra_config: DictConfig, rank: int, world_size: int) -> PretrainConfig:
+def load_synced_config(hydra_config: DictConfig, rank: int, world_size: int) -> TrainRLConfig:
     objects = [None]
     if rank == 0:
-        config = PretrainConfig(**hydra_config)  # type: ignore
+        config = TrainRLConfig(**hydra_config)  # type: ignore
 
         # Naming
         if config.project_name is None:
-            config.project_name = f"{os.path.basename(config.data_paths[0]).capitalize()}-ACT-torch"
+            config.project_name = f"{os.path.basename(config.data_paths[0]).capitalize()}-GRPO-torch"
         if config.run_name is None:
             config.run_name = f"{config.arch.name.split('@')[-1]} {coolname.generate_slug(2)}"
         if config.checkpoint_path is None:
@@ -532,7 +700,7 @@ def load_synced_config(hydra_config: DictConfig, rank: int, world_size: int) -> 
     return objects[0]  # type: ignore
 
 
-@hydra.main(config_path="config", config_name="cfg_pretrain", version_base=None)
+@hydra.main(config_path="config", config_name="cfg_train_grpo", version_base=None)
 def launch(hydra_config: DictConfig):
     RANK = 0
     WORLD_SIZE = 1
@@ -547,7 +715,7 @@ def launch(hydra_config: DictConfig):
         WORLD_SIZE = dist.get_world_size()
 
         torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
-        
+
         # CPU GLOO process group
         CPU_PROCESS_GROUP = dist.new_group(backend="gloo")
         assert (
@@ -556,6 +724,16 @@ def launch(hydra_config: DictConfig):
 
     # Load sync'ed config
     config = load_synced_config(hydra_config, rank=RANK, world_size=WORLD_SIZE)
+
+    # [Gradient Accumulation] parameters for gradient accumulation
+    BATCH_SIZE = config.micro_batch_size if config.micro_batch_size is not None else config.global_batch_size
+    ACCUMULATION_STEPS = max(1, config.global_batch_size // BATCH_SIZE)
+
+    if RANK == 0 and config.micro_batch_size is not None:
+        print(f"Gradient Accumulation Enabled:")
+        print(f"  Target Global Batch Size: {config.global_batch_size}")
+        print(f"  Actual Batch Size       : {BATCH_SIZE}")
+        print(f"  Accumulation Steps      : {ACCUMULATION_STEPS}")
 
     # Seed RNGs to ensure consistency
     torch.random.manual_seed(config.seed + RANK)
@@ -566,9 +744,9 @@ def launch(hydra_config: DictConfig):
 
     assert config.epochs % train_epochs_per_iter == 0, "Eval interval must be a divisor of total epochs."
 
-    train_loader, train_metadata = create_dataloader(config, "train", test_set_mode=False, epochs_per_iter=train_epochs_per_iter, global_batch_size=config.global_batch_size, rank=RANK, world_size=WORLD_SIZE)
+    train_loader, train_metadata = create_dataloader(config, "train", test_set_mode=False, epochs_per_iter=train_epochs_per_iter, global_batch_size=BATCH_SIZE, rank=RANK, world_size=WORLD_SIZE)
     try:
-        eval_loader,  eval_metadata  = create_dataloader(config, "test", test_set_mode=True, epochs_per_iter=1, global_batch_size=config.global_batch_size, rank=RANK, world_size=WORLD_SIZE)
+        eval_loader,  eval_metadata  = create_dataloader(config, "test", test_set_mode=True, epochs_per_iter=1, global_batch_size=config.eval_batch_size, rank=RANK, world_size=WORLD_SIZE)
     except:
         print("NO EVAL DATA FOUND")
         eval_loader = eval_metadata = None
@@ -579,10 +757,11 @@ def launch(hydra_config: DictConfig):
         print("No evaluator found")
         evaluators = []
 
+
     # Train state
     train_state = init_train_state(config, train_metadata, rank=RANK, world_size=WORLD_SIZE)
 
-    # Progress bar and logger
+    # Logger
     progress_bar = None
     ema_helper = None
     if RANK == 0:
@@ -590,26 +769,62 @@ def launch(hydra_config: DictConfig):
         wandb.init(project=config.project_name, name=config.run_name, config=config.model_dump(), settings=wandb.Settings(_disable_stats=True))  # type: ignore
         wandb.log({"num_params": sum(x.numel() for x in train_state.model.parameters())}, step=0)
         save_code_and_config(config)
+
     if config.ema:
-        print('Setup EMA')
+        print("Setup EMA")
         ema_helper = EMAHelper(mu=config.ema_rate)
         ema_helper.register(train_state.model)
 
-    # Training Loop
+    # # Initial evaluation before training
+    # if eval_loader is not None:
+    #     if RANK == 0:
+    #         print("INITIAL EVALUATE (before training)")
+    #     train_state.model.eval()
+    #     metrics = evaluate(config, 
+    #         train_state, 
+    #         eval_loader, 
+    #         eval_metadata, 
+    #         evaluators,
+    #         rank=RANK, 
+    #         world_size=WORLD_SIZE,
+    #         cpu_group=CPU_PROCESS_GROUP)
+    #     if RANK == 0 and metrics is not None:
+    #         wandb.log(metrics, step=0)
+
+    # Training loop
+    # [Gradient Accumulation] micro step counter for gradient accumulation
+    micro_step_counter = 0
+
     for _iter_id in range(total_iters):
         print (f"[Rank {RANK}, World Size {WORLD_SIZE}]: Epoch {_iter_id * train_epochs_per_iter}")
 
-        ############ Train Iter
         if RANK == 0:
-            print("TRAIN")
+            print("TRAIN_RL")
         train_state.model.train()
+
+        # [Gradient Accumulation] loop over train_loader with micro batches; current value of `global_batch_size` is `micro_batch_size`
         for set_name, batch, global_batch_size in train_loader:
-            metrics = train_batch(config, train_state, batch, global_batch_size, rank=RANK, world_size=WORLD_SIZE)
+
+            # [Gradient Accumulation] increment micro step counter and determine if this is an update step
+            micro_step_counter += 1
+            is_update_step = (micro_step_counter % ACCUMULATION_STEPS == 0)
+
+            # [Gradient Accumulation] pass boolean flag `is_update_step` to train_batch to indicate whether this is a true update step
+            metrics = train_batch(
+                config=config,
+                train_state=train_state,
+                batch=batch,
+                global_batch_size=global_batch_size,
+                rank=RANK,
+                world_size=WORLD_SIZE,
+                is_update_step=is_update_step,
+            )
 
             if RANK == 0 and metrics is not None:
                 wandb.log(metrics, step=train_state.step)
                 progress_bar.update(train_state.step - progress_bar.n)  # type: ignore
-            if config.ema:
+
+            if is_update_step and config.ema and ema_helper is not None:
                 ema_helper.update(train_state.model)
 
         if _iter_id >= config.min_eval_interval:
@@ -618,6 +833,7 @@ def launch(hydra_config: DictConfig):
                 print("EVALUATE")
             if config.ema:
                 print("SWITCH TO EMA")
+                train_state.carry = None
                 train_state_eval = copy.deepcopy(train_state)
                 train_state_eval.model = ema_helper.ema_copy(train_state_eval.model)
             else:

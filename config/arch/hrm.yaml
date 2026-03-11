@@ -1,6 +1,6 @@
 name: recursive_reasoning.hrm@HierarchicalReasoningModel_ACTV1
 loss:
-  name: losses@ACTLossHead
+  name: losses.act_loss@ACTLossHead
   loss_type: stablemax_cross_entropy
 
 halt_exploration_prob: 0.1
