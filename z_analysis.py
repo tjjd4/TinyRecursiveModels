@@ -219,18 +219,23 @@ class ZAnalysisCollector:
     """Accumulates z_H snapshots and correctness flags across batches."""
     # Per-puzzle: list of (T_steps, L, D) float32 arrays (mean-pooled over L → (T,D))
     trajectories: List[np.ndarray] = None   # filled after collection
+    z_L_trajectories: List[np.ndarray] = None
     correct_flags: List[bool] = None
     residuals: List[np.ndarray] = None      # per-puzzle (T-1,) arrays
+    z_L_residuals: List[np.ndarray] = None
 
     def __post_init__(self):
         self.trajectories  = []
+        self.z_L_trajectories = []
         self.correct_flags = []
         self.residuals     = []
+        self.z_L_residuals = []
         self.pos_residuals = []
         self.given_masks   = []
 
         # Internal accumulation buffers keyed by puzzle index in a batch
         self._z_H_per_step_batch: List[List[np.ndarray]] = []  # reset each batch
+        self._z_L_per_step_batch: List[List[np.ndarray]] = []  # reset each batch
         self._z_H_pos_per_step_batch = []
         self._batch_open: bool = False
 
@@ -238,13 +243,14 @@ class ZAnalysisCollector:
         """Call once before the while-loop for each batch."""
         batch_size = config.global_batch_size
         self._z_H_per_step_batch = [[] for _ in range(batch_size)]
+        self._z_L_per_step_batch = [[] for _ in range(batch_size)]
         self._z_H_pos_per_step_batch = [[] for _ in range(batch_size)]
         self._batch_open = True
-        labels_np = batch["labels"].cpu().numpy()   # (B, seq_len)
+        inputs_np = batch["inputs"].cpu().numpy()   # (B, seq_len)
         self._given_masks_batch = []
         for b in range(batch_size):
-            cell_labels = labels_np[b, :81]   # (81,) cell labels
-            given = cell_labels == IGNORE_LABEL_ID            # (81,) bool — True = given (不需要預測)
+            cell_inputs = inputs_np[b, :81]   # (81,) cell labels
+            given = cell_inputs != 1
             self._given_masks_batch.append(given)
 
     def record_step(self, carry):
@@ -253,9 +259,11 @@ class ZAnalysisCollector:
             return
         # carry.inner_carry.z_H : (B, L, D)
         z_H_cpu = carry.inner_carry.z_H.float().cpu().numpy()
+        z_L_cpu = carry.inner_carry.z_L.float().cpu().numpy()
         for b in range(z_H_cpu.shape[0]):
             # Mean-pool over sequence positions → (D,)  to save memory
             self._z_H_per_step_batch[b].append(z_H_cpu[b].mean(axis=0))
+            self._z_L_per_step_batch[b].append(z_L_cpu[b].mean(axis=0))
             self._z_H_pos_per_step_batch[b].append(z_H_cpu[b])
 
     def end_batch(self, carry, labels, final_preds):
@@ -275,19 +283,30 @@ class ZAnalysisCollector:
 
         B = len(self._z_H_per_step_batch)
         for b in range(B):
-            steps = self._z_H_per_step_batch[b]   # list of (D,) arrays
-            if len(steps) == 0:
+            z_H_steps = self._z_H_per_step_batch[b]   # list of (D,) arrays
+            z_L_steps = self._z_L_per_step_batch[b]
+            if len(z_H_steps) == 0:
                 continue
-            traj = np.stack(steps, axis=0)         # (T, D)
-            self.trajectories.append(traj)
+            z_H_traj = np.stack(z_H_steps, axis=0)         # (T, D)
+            z_L_traj = np.stack(z_L_steps, axis=0)
+            self.trajectories.append(z_H_traj)
             self.correct_flags.append(bool(correct_np[b]))
+            self.z_L_trajectories.append(z_L_traj)
 
-            if traj.shape[0] > 1:
-                diffs = np.linalg.norm(np.diff(traj, axis=0), axis=-1)   # (T-1,)
-                diffs = diffs / math.sqrt(traj.shape[1])                  # normalise by sqrt(D)
+            if z_H_traj.shape[0] > 1:
+                diffs = np.linalg.norm(np.diff(z_H_traj, axis=0), axis=-1)   # (T-1,)
+                diffs = diffs / math.sqrt(z_H_traj.shape[1])                  # normalise by sqrt(D)
             else:
                 diffs = np.array([0.0])
             self.residuals.append(diffs)
+
+            if z_L_traj.shape[0] > 1:
+                z_L_diffs = np.linalg.norm(np.diff(z_L_traj, axis=0), axis=-1)   # (T-1,)
+                z_L_diffs = z_L_diffs / math.sqrt(z_L_traj.shape[1])                  # normalise by sqrt(D)
+            else:
+                z_L_diffs = np.array([0.0])
+            self.z_L_residuals.append(z_L_diffs)
+
             pos_steps = self._z_H_pos_per_step_batch[b]   # list of (L, D)
             if len(pos_steps) > 1:
                 pos_traj = np.stack(pos_steps, axis=0)     # (T, L, D)
@@ -336,28 +355,40 @@ def run_z_analysis(
     # ── PCA ────────────────────────────────────────────────────────────────
     max_s = config.z_analysis_max_samples_pca
     trajs = collector.trajectories
-    if len(trajs) > max_s:
+    z_L_trajs = collector.z_L_trajectories
+    if min(len(trajs), len(z_L_trajs)) > max_s:
         rng = np.random.default_rng(0)
-        idxs = rng.choice(len(trajs), max_s, replace=False).tolist()
+        idxs = rng.choice(min(len(trajs), len(z_L_trajs)), max_s, replace=False).tolist()
     else:
-        idxs = list(range(len(trajs)))
+        idxs = list(range(min(len(trajs), len(z_L_trajs))))
 
     sub_trajs = [trajs[i] for i in idxs]
+    sub_z_L_trajs = [z_L_trajs[i] for i in idxs]
     sub_flags = [collector.correct_flags[i] for i in idxs]
 
-    all_vecs = np.concatenate(sub_trajs, axis=0)    # (sum_T, D)
+    all_z_H = np.concatenate(sub_trajs, axis=0)    # (sum_T, D)
+    all_z_L = np.concatenate(sub_z_L_trajs, axis=0)
     sample_ids = np.concatenate(
         [np.full(t.shape[0], si, dtype=int) for si, t in enumerate(sub_trajs)]
     )
 
-    n_comp = min(config.z_analysis_pca_components, all_vecs.shape[1], all_vecs.shape[0])
+    n_comp = min(config.z_analysis_pca_components, all_z_H.shape[1], all_z_H.shape[0])
     pca = PCA(n_components=n_comp, random_state=0)
-    proj = pca.fit_transform(all_vecs)   # (sum_T, n_comp)
+    proj = pca.fit_transform(all_z_H)   # (sum_T, n_comp)
 
     h_init = train_state.model.model.inner.H_init
     h_init_vec = h_init.float().cpu().numpy().reshape(1, -1)
     proj_hinit_single = pca.transform(h_init_vec)[:, :2]   # (1, 2)
     proj_inits = np.repeat(proj_hinit_single, len(sub_trajs), axis=0)  # (N, 2)
+
+    n_comp_L = min(config.z_analysis_pca_components, all_z_L.shape[1], all_z_L.shape[0])
+    pca_L = PCA(n_components=n_comp_L, random_state=0)
+    proj_z_L = pca_L.fit_transform(all_z_L)   # (sum_T, n_comp_L)
+
+    l_init = train_state.model.model.inner.L_init
+    l_init_vec = l_init.float().cpu().numpy().reshape(1, -1)
+    proj_linit_single = pca_L.transform(l_init_vec)[:, :2]   # (1, 2)
+    proj_inits_L = np.repeat(proj_linit_single, len(sub_trajs), axis=0)  # (N, 2)
 
     # ── scalar metrics ─────────────────────────────────────────────────────
     wandb_log: dict = {}
@@ -412,15 +443,24 @@ def run_z_analysis(
     wandb_log["z_analysis/pca_explained_variance"] = ev_table
 
     # ── plots → wandb.Image ────────────────────────────────────────────────
-    wandb_log["z_analysis/pca_split"]         = _save_wandb(_plot_pca_split(proj, sample_ids, sub_flags, pca, save_dir),         save_dir, "z_trajectory_pca_split.png")
-    wandb_log["z_analysis/pca_combined"]      = _save_wandb(_plot_pca_combined(proj, sample_ids, sub_flags, pca, save_dir),      save_dir, "z_trajectory_pca_combined.png")
-    wandb_log["z_analysis/forward_residual"]  = _save_wandb(_plot_forward_residual(collector.residuals, collector.correct_flags, save_dir), save_dir, "forward_residual.png")
-    wandb_log["z_analysis/pca_variance"]      = _save_wandb(_plot_pca_variance(pca, save_dir),                                  save_dir, "pca_variance.png")
-    wandb_log["z_analysis/displacement_hist"] = _save_wandb(_plot_displacement_hist(collector.trajectories, collector.correct_flags, save_dir), save_dir, "displacement_histogram.png")
-    wandb_log["z_analysis/pca_step0_final"]   = _save_wandb(_plot_step0_vs_final(proj, sample_ids, sub_flags, save_dir),        save_dir, "pca_step0_vs_final.png")
-    wandb_log["z_analysis/pca_hinit_final"]   = _save_wandb(_plot_hinit_vs_final(proj_inits, proj, sample_ids, sub_flags, save_dir), save_dir, "pca_hinit_vs_final.png")
-    wandb_log["z_analysis/pos_residual_heatmap"] = _save_wandb(_plot_pos_residual_heatmap(collector.pos_residuals, collector.given_masks, collector.correct_flags, puzzle_emb_len=config.arch.puzzle_emb_len), save_dir, "pos_residual_heatmap.png")
-    wandb_log["z_analysis/pos_residual_by_step"] = _save_wandb(_plot_pos_residual_by_step(collector.pos_residuals, collector.given_masks, collector.correct_flags, puzzle_emb_len=config.arch.puzzle_emb_len), save_dir, "pos_residual_by_step.png")
+    wandb_log["z_analysis/z_H_pca_split"] = _save_wandb(_plot_pca_split(proj, sample_ids, sub_flags, pca, save_dir, z_label="z_H"), save_dir, "z_H_trajectory_pca_split.png")
+    wandb_log["z_analysis/z_H_pca_combined"] = _save_wandb(_plot_pca_combined(proj, sample_ids, sub_flags, pca, save_dir, z_label="z_H"), save_dir, "z_H_trajectory_pca_combined.png")
+    wandb_log["z_analysis/z_H_forward_residual"] = _save_wandb(_plot_forward_residual(collector.residuals, collector.correct_flags, save_dir, z_label="z_H"), save_dir, "z_H_forward_residual.png")
+    wandb_log["z_analysis/z_H_pca_variance"] = _save_wandb(_plot_pca_variance(pca, save_dir, z_label="z_H"), save_dir, "z_H_pca_variance.png")
+    wandb_log["z_analysis/z_H_displacement_hist"] = _save_wandb(_plot_displacement_hist(collector.trajectories, collector.correct_flags, save_dir, z_label="z_H"), save_dir, "z_H_displacement_histogram.png")
+    wandb_log["z_analysis/z_H_pca_step1_final"] = _save_wandb(_plot_step1_vs_final(proj, sample_ids, sub_flags, save_dir, z_label="z_H"), save_dir, "z_H_pca_step1_vs_final.png")
+    wandb_log["z_analysis/z_H_pca_hinit_final"] = _save_wandb(_plot_hinit_vs_final(proj_inits, proj, sample_ids, sub_flags, save_dir, z_label="z_H"), save_dir, "z_H_pca_hinit_vs_final.png")
+    wandb_log["z_analysis/z_H_pos_residual_heatmap_given"] = _save_wandb(_plot_pos_residual_heatmap_given(collector.pos_residuals, collector.given_masks, collector.correct_flags, puzzle_emb_len=config.arch.puzzle_emb_len), save_dir, "z_H_pos_residual_heatmap_given.png")
+    wandb_log["z_analysis/z_H_pos_residual_heatmap_empty"] = _save_wandb(_plot_pos_residual_heatmap_empty(collector.pos_residuals, collector.given_masks, collector.correct_flags, puzzle_emb_len=config.arch.puzzle_emb_len), save_dir, "z_H_pos_residual_heatmap_empty.png")
+    wandb_log["z_analysis/z_H_pos_residual_by_step"] = _save_wandb(_plot_pos_residual_by_step(collector.pos_residuals, collector.given_masks, collector.correct_flags, puzzle_emb_len=config.arch.puzzle_emb_len), save_dir, "z_H_pos_residual_by_step.png")
+    
+    wandb_log["z_analysis/z_L_pca_split"] = _save_wandb(_plot_pca_split(proj_z_L, sample_ids, sub_flags, pca_L, save_dir, z_label="z_L"), save_dir, "z_L_trajectory_pca_split.png")
+    wandb_log["z_analysis/z_L_pca_combined"] = _save_wandb(_plot_pca_combined(proj_z_L, sample_ids, sub_flags, pca_L, save_dir, z_label="z_L"), save_dir, "z_L_trajectory_pca_combined.png")
+    wandb_log["z_analysis/z_L_forward_residual"] = _save_wandb(_plot_forward_residual(collector.z_L_residuals, collector.correct_flags, save_dir, z_label="z_L"), save_dir, "z_L_forward_residual.png")
+    wandb_log["z_analysis/z_L_pca_variance"] = _save_wandb(_plot_pca_variance(pca_L, save_dir, z_label="z_L"), save_dir, "z_L_pca_variance.png")
+    wandb_log["z_analysis/z_L_displacement_hist"] = _save_wandb(_plot_displacement_hist(collector.z_L_trajectories, collector.correct_flags, save_dir, z_label="z_L"), save_dir, "z_L_displacement_histogram.png")
+    wandb_log["z_analysis/z_L_pca_step1_final"] = _save_wandb(_plot_step1_vs_final(proj_z_L, sample_ids, sub_flags, save_dir, z_label="z_L"), save_dir, "z_L_pca_step1_vs_final.png")
+    wandb_log["z_analysis/z_L_pca_hinit_final"] = _save_wandb(_plot_hinit_vs_final(proj_inits_L, proj_z_L, sample_ids, sub_flags, save_dir, z_label="z_L"), save_dir, "z_L_pca_hinit_vs_final.png")
     # Drop None values (plots that returned None due to insufficient data)
     wandb_log = {k: v for k, v in wandb_log.items() if v is not None}
 
@@ -480,7 +520,7 @@ def _save_wandb(fig, save_dir: str, filename: str) -> Optional[wandb.Image]:
     return wandb.Image(path)
 
 
-def _plot_pca_split(proj, sample_ids, flags, pca, save_dir, n_show=60):
+def _plot_pca_split(proj, sample_ids, flags, pca, save_dir, n_show=60, z_label="z_H"):
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
     correct_local = [i for i, f in enumerate(flags) if f]
     incorrect_local = [i for i, f in enumerate(flags) if not f]
@@ -503,12 +543,12 @@ def _plot_pca_split(proj, sample_ids, flags, pca, save_dir, n_show=60):
         ax.set_ylabel(f"PC2 ({pca.explained_variance_ratio_[1]*100:.1f}%)")
         ax.grid(True, lw=0.3, alpha=0.5)
 
-    plt.suptitle("TRM  z_H  PCA trajectories  ○=step0  ★=final", fontsize=11)
+    plt.suptitle(f"TRM  {z_label}  PCA trajectories  ○=step0  ★=final", fontsize=11)
     plt.tight_layout()
     return fig
 
 
-def _plot_pca_combined(proj, sample_ids, flags, pca, save_dir, n_show=80):
+def _plot_pca_combined(proj, sample_ids, flags, pca, save_dir, n_show=80, z_label="z_H"):
     fig, ax = plt.subplots(figsize=(8, 7))
     for li, is_correct in enumerate(flags[:n_show]):
         color = "steelblue" if is_correct else "firebrick"
@@ -526,7 +566,7 @@ def _plot_pca_combined(proj, sample_ids, flags, pca, save_dir, n_show=80):
         Line2D([0], [0], color="gray", lw=0, marker="*", markersize=8, label="Final step"),
     ]
     ax.legend(handles=legend_elements, fontsize=10)
-    ax.set_title("TRM  z_H  PCA trajectories  (correct vs incorrect)", fontsize=12)
+    ax.set_title(f"TRM  {z_label}  PCA trajectories  (correct vs incorrect)", fontsize=12)
     ax.set_xlabel(f"PC1 ({pca.explained_variance_ratio_[0]*100:.1f}%)")
     ax.set_ylabel(f"PC2 ({pca.explained_variance_ratio_[1]*100:.1f}%)")
     ax.grid(True, lw=0.3, alpha=0.5)
@@ -534,7 +574,7 @@ def _plot_pca_combined(proj, sample_ids, flags, pca, save_dir, n_show=80):
     return fig
 
 
-def _plot_forward_residual(residuals, flags, save_dir):
+def _plot_forward_residual(residuals, flags, save_dir, z_label="z_H"):
     max_T = max(r.shape[0] for r in residuals) if residuals else 0
     if max_T == 0:
         return None
@@ -565,15 +605,15 @@ def _plot_forward_residual(residuals, flags, save_dir):
         ax.fill_between(steps, mean - std, mean + std, color=color, alpha=0.15)
 
     ax.set_xlabel("Supervision Step Index #", fontsize=11)
-    ax.set_ylabel("||z_H[t] − z_H[t−1]|| / √D", fontsize=10)
-    ax.set_title("TRM  z_H  Forward Residual  (correct vs incorrect)", fontsize=12)
+    ax.set_ylabel(f"||{z_label}[t] - {z_label}[t-1]|| / √D", fontsize=10)
+    ax.set_title(f"TRM  {z_label}  Forward Residual  (correct vs incorrect)", fontsize=12)
     ax.legend(fontsize=10)
     ax.grid(True, lw=0.3, alpha=0.5)
     plt.tight_layout()
     return fig
 
 
-def _plot_pca_variance(pca, save_dir):
+def _plot_pca_variance(pca, save_dir, z_label="z_H"):
     n = len(pca.explained_variance_ratio_)
     fig, axes = plt.subplots(1, 2, figsize=(10, 4))
     axes[0].bar(range(1, n + 1), pca.explained_variance_ratio_ * 100, color="steelblue")
@@ -589,12 +629,12 @@ def _plot_pca_variance(pca, save_dir):
     axes[1].set_title("Cumulative Variance")
     axes[1].legend()
 
-    plt.suptitle("PCA of TRM  z_H  (mean-pooled over sequence positions)", fontsize=11)
+    plt.suptitle(f"PCA of TRM  {z_label}  (mean-pooled over sequence positions)", fontsize=11)
     plt.tight_layout()
     return fig
 
 
-def _plot_displacement_hist(trajs, flags, save_dir):
+def _plot_displacement_hist(trajs, flags, save_dir, z_label="z_H"):
     correct_disp, incorrect_disp = [], []
     for traj, is_correct in zip(trajs, flags):
         if traj.shape[0] > 1:
@@ -612,16 +652,16 @@ def _plot_displacement_hist(trajs, flags, save_dir):
             label=f"Correct  (n={len(correct_disp)})",   density=True)
     ax.hist(incorrect_disp, bins=bins, alpha=0.6, color="firebrick",
             label=f"Incorrect  (n={len(incorrect_disp)})", density=True)
-    ax.set_xlabel("Total z_H displacement  (sum of step-wise L2 norms)")
+    ax.set_xlabel(f"Total {z_label} displacement  (sum of step-wise L2 norms)")
     ax.set_ylabel("Density")
-    ax.set_title("z_H trajectory total displacement  (correct vs incorrect)")
+    ax.set_title(f"{z_label} trajectory total displacement  (correct vs incorrect)")
     ax.legend()
     ax.grid(True, lw=0.3, alpha=0.5)
     plt.tight_layout()
     return fig
 
 
-def _plot_step0_vs_final(proj, sample_ids, flags, save_dir):
+def _plot_step1_vs_final(proj, sample_ids, flags, save_dir, z_label="z_H"):
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
     for ax, is_c, color, title in [
         (axes[0], True,  "steelblue", "Correct"),
@@ -646,16 +686,17 @@ def _plot_step0_vs_final(proj, sample_ids, flags, save_dir):
         ax.set_xlabel("PC1"); ax.set_ylabel("PC2")
         ax.legend(fontsize=9)
         ax.grid(True, lw=0.3, alpha=0.5)
-    plt.suptitle("z_H PCA: Step-0 vs Final step", fontsize=11)
+    plt.suptitle(f"{z_label} PCA: Step-0 vs Final step", fontsize=11)
     plt.tight_layout()
     return fig
 
 
-def _plot_hinit_vs_final(proj_inits, proj, sample_ids, flags, save_dir):
-    """H_init reset position (×) vs final step (★) for correct/incorrect."""
+def _plot_hinit_vs_final(proj_inits, proj, sample_ids, flags, save_dir, z_label="z_H"):
+    """Init reset position (×) vs final step (★) for correct/incorrect."""
+    init_name = "H_init" if z_label == "z_H" else "L_init"
     fig, ax = plt.subplots(figsize=(8, 7))
 
-    # H_init points colored by correct/incorrect
+    # Init points colored by correct/incorrect
     for li, is_correct in enumerate(flags):
         color = "steelblue" if is_correct else "firebrick"
         ax.scatter(proj_inits[li, 0], proj_inits[li, 1],
@@ -672,66 +713,71 @@ def _plot_hinit_vs_final(proj_inits, proj, sample_ids, flags, save_dir):
 
     legend_elements = [
         Line2D([0], [0], color="steelblue", lw=0, marker="x", markersize=9, alpha=0.4,
-               label="H_init → correct"),
+               label=f"{init_name} → correct"),
         Line2D([0], [0], color="firebrick", lw=0, marker="x", markersize=9, alpha=0.4,
-               label="H_init → incorrect"),
+               label=f"{init_name} → incorrect"),
         Line2D([0], [0], color="steelblue", lw=0, marker="*", markersize=9,
                label="Final (correct)"),
         Line2D([0], [0], color="firebrick", lw=0, marker="*", markersize=9,
                label="Final (incorrect)"),
     ]
     ax.legend(handles=legend_elements, fontsize=10)
-    ax.set_title("H_init reset position vs Final step  (PCA space)", fontsize=12)
+    ax.set_title(f"{init_name} reset position vs Final step  (PCA space)", fontsize=12)
     ax.set_xlabel("PC1"); ax.set_ylabel("PC2")
     ax.grid(True, lw=0.3, alpha=0.5)
     plt.tight_layout()
     return fig
 
 
-def _plot_pos_residual_heatmap(
+def _plot_pos_residual_heatmap_role(
     pos_residuals: List[np.ndarray],   # per-puzzle (T-1, L_full)
     given_masks: List[np.ndarray],     # per-puzzle (81,) bool
     flags: List[bool],
-    puzzle_emb_len: int = 2,
+    role: str,                         # "given" or "empty"
+    puzzle_emb_len,
 ):
     """
-    9x9 heatmap: each cell's average z_H residual (across steps and puzzles).
+    9x9 heatmap with conditional averaging: only count a cell's residual
+    when it matches the target *role* in that puzzle.
     Left: correct puzzles, Right: incorrect puzzles.
-    Given cells are marked with black frames.
+    Grey cells = no data (that cell never appeared as the target role).
     """
+    assert role in ("given", "empty")
+    is_target = True if role == "given" else False   # mask value to select
+
     correct_idxs   = [i for i, f in enumerate(flags) if f]
     incorrect_idxs = [i for i, f in enumerate(flags) if not f]
 
     def _mean_grid(idxs):
-        """Average per-cell residual across all puzzles and steps, return (9, 9)."""
+        """Conditional average: only accumulate when cell role matches."""
         if not idxs:
-            return None, None
-        # For each puzzle: mean over steps → (L_full,), take cell part
-        cell_means = []
-        given_sum  = np.zeros(81, dtype=np.float32)
+            return None
+        accum = np.zeros(81, dtype=np.float64)
+        count = np.zeros(81, dtype=np.float64)
         for i in idxs:
-            r = pos_residuals[i]                    # (T-1, L_full)
-            cell_r = r[:, puzzle_emb_len:puzzle_emb_len + 81]  # (T-1, 81)
-            cell_means.append(cell_r.mean(axis=0))  # (81,)
-            given_sum += given_masks[i].astype(np.float32)
-        arr = np.array(cell_means).mean(axis=0)     # (81,)
-        given_avg = given_sum / len(idxs)            # (81,) 0~1，majority vote
-        return arr.reshape(9, 9), (given_avg > 0.5).reshape(9, 9)
+            r = pos_residuals[i]                                  # (T-1, L_full)
+            cell_r = r[:, puzzle_emb_len:puzzle_emb_len + 81]     # (T-1, 81)
+            cell_mean = cell_r.mean(axis=0)                       # (81,)
+            gm = given_masks[i]                                   # (81,) bool
+            sel = gm if is_target else ~gm
+            accum[sel] += cell_mean[sel]
+            count[sel] += 1
+        grid = np.where(count > 0, accum / count, np.nan)
+        return grid.reshape(9, 9)
 
-    grid_c, given_c = _mean_grid(correct_idxs)
-    grid_i, given_i = _mean_grid(incorrect_idxs)
+    grid_c = _mean_grid(correct_idxs)
+    grid_i = _mean_grid(incorrect_idxs)
 
-    vmin = min(
-        g.min() for g in [grid_c, grid_i] if g is not None
-    )
-    vmax = max(
-        g.max() for g in [grid_c, grid_i] if g is not None
-    )
+    grids = [g for g in [grid_c, grid_i] if g is not None]
+    if not grids:
+        return None
+    vmin = float(np.nanmin([np.nanmin(g) for g in grids]))
+    vmax = float(np.nanmax([np.nanmax(g) for g in grids]))
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    for ax, grid, given, title in [
-        (axes[0], grid_c, given_c, f"Correct  (n={len(correct_idxs)})"),
-        (axes[1], grid_i, given_i, f"Incorrect  (n={len(incorrect_idxs)})"),
+    for ax, grid, title in [
+        (axes[0], grid_c, f"Correct  (n={len(correct_idxs)})"),
+        (axes[1], grid_i, f"Incorrect  (n={len(incorrect_idxs)})"),
     ]:
         if grid is None:
             ax.set_title(f"{title}\n(no data)")
@@ -739,18 +785,17 @@ def _plot_pos_residual_heatmap(
         im = ax.imshow(grid, vmin=vmin, vmax=vmax, cmap="hot_r", aspect="equal")
         plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
-        # given cell are marked as black
-        if given is not None:
-            for r in range(9):
-                for c in range(9):
-                    if given[r, c]:
-                        rect = plt.Rectangle(
-                            (c - 0.5, r - 0.5), 1, 1,
-                            linewidth=1.5, edgecolor="black", facecolor="none"
-                        )
-                        ax.add_patch(rect)
+        # Mark cells with no data (NaN) as grey hatched
+        for r in range(9):
+            for c in range(9):
+                if np.isnan(grid[r, c]):
+                    rect = plt.Rectangle(
+                        (c - 0.5, r - 0.5), 1, 1,
+                        linewidth=0, facecolor="lightgrey", zorder=0
+                    )
+                    ax.add_patch(rect)
 
-        # 3x3 box
+        # 3x3 box lines
         for line in [2.5, 5.5]:
             ax.axhline(line, color="white", lw=1.5)
             ax.axvline(line, color="white", lw=1.5)
@@ -759,13 +804,22 @@ def _plot_pos_residual_heatmap(
         ax.set_xticks(range(9))
         ax.set_yticks(range(9))
 
+    role_label = "Given" if role == "given" else "Empty"
     plt.suptitle(
-        "z_H Per-Cell Mean Residual  (averaged over steps & puzzles)\n"
-        "Black border = given cell,  Bright = high activity",
+        f"z_H Per-Cell Mean Residual — {role_label} Cells Only\n"
+        "Grey = no data for that role,  Bright = high activity",
         fontsize=11
     )
     plt.tight_layout()
     return fig
+
+
+def _plot_pos_residual_heatmap_given(pos_residuals, given_masks, flags, puzzle_emb_len):
+    return _plot_pos_residual_heatmap_role(pos_residuals, given_masks, flags, role="given", puzzle_emb_len=puzzle_emb_len)
+
+
+def _plot_pos_residual_heatmap_empty(pos_residuals, given_masks, flags, puzzle_emb_len):
+    return _plot_pos_residual_heatmap_role(pos_residuals, given_masks, flags, role="empty", puzzle_emb_len=puzzle_emb_len)
 
 
 def _plot_pos_residual_by_step(
