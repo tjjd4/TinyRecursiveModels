@@ -27,6 +27,8 @@ from omegaconf import DictConfig
 from puzzle_dataset import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
 from utils.functions import load_model_class, get_model_source_path
 
+from models.losses.loss_fn import IGNORE_LABEL_ID
+
 
 class LossConfig(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra='allow')
@@ -238,11 +240,11 @@ class ZAnalysisCollector:
         self._z_H_per_step_batch = [[] for _ in range(batch_size)]
         self._z_H_pos_per_step_batch = [[] for _ in range(batch_size)]
         self._batch_open = True
-        inputs_np = batch["inputs"].cpu().numpy()   # (B, 81) — cell tokens only, no puzzle-emb prefix
+        labels_np = batch["labels"].cpu().numpy()   # (B, seq_len)
         self._given_masks_batch = []
         for b in range(batch_size):
-            cell_inputs = inputs_np[b, :81]   # (81,) cell tokens
-            given = cell_inputs > 0            # (81,) bool
+            cell_labels = labels_np[b, :81]   # (81,) cell labels
+            given = cell_labels == IGNORE_LABEL_ID            # (81,) bool — True = given (不需要預測)
             self._given_masks_batch.append(given)
 
     def record_step(self, carry):
