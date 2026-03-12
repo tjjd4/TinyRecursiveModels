@@ -543,7 +543,7 @@ def _plot_pca_split(proj, sample_ids, flags, pca, save_dir, n_show=60, z_label="
         ax.set_ylabel(f"PC2 ({pca.explained_variance_ratio_[1]*100:.1f}%)")
         ax.grid(True, lw=0.3, alpha=0.5)
 
-    plt.suptitle(f"TRM  {z_label}  PCA trajectories  ○=step0  ★=final", fontsize=11)
+    plt.suptitle(f"TRM  {z_label}  PCA trajectories  ○=step1  ★=final", fontsize=11)
     plt.tight_layout()
     return fig
 
