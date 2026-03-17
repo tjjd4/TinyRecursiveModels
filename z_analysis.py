@@ -205,6 +205,7 @@ class ZAnalysisCollector:
         self.z_L_residuals = []
         self.pos_residuals = []
         self.given_masks   = []
+        self.n_skipped     = 0
 
         # Internal accumulation buffers keyed by puzzle index in a batch
         self._z_H_per_step_batch: List[List[np.ndarray]] = []  # reset each batch
@@ -259,13 +260,20 @@ class ZAnalysisCollector:
         for b in range(B):
             z_H_steps = self._z_H_per_step_batch[b]   # list of (D,) arrays
             z_L_steps = self._z_L_per_step_batch[b]
-            if len(z_H_steps) == 0:
+
+            has_trajectory = len(z_H_steps) > 0 and len(z_L_steps) > 0
+            has_rating     = (ratings is not None) and (b < len(ratings))
+            has_pos        = len(self._z_H_pos_per_step_batch[b]) > 0
+            has_given_mask = b < len(self._given_masks_batch)
+
+            if not (has_trajectory and has_rating and has_pos and has_given_mask):
+                self.n_skipped += 1
                 continue
+
             z_H_traj = np.stack(z_H_steps, axis=0)         # (T, D)
             z_L_traj = np.stack(z_L_steps, axis=0)
             
             self.ratings.append(int(ratings[b]))
-
             self.trajectories.append(z_H_traj)
             self.correct_flags.append(bool(correct_np[b]))
             self.z_L_trajectories.append(z_L_traj)
@@ -301,7 +309,6 @@ class ZAnalysisCollector:
         return len(self.trajectories)
 
 
-
 def run_z_analysis(
     collector: ZAnalysisCollector,
     config: EvalConfig,
@@ -316,8 +323,14 @@ def run_z_analysis(
 
     os.makedirs(save_dir, exist_ok=True)
     n = collector.n_samples
+    n_skipped = collector.n_skipped
     n_correct = sum(collector.correct_flags)
     print(f"\n[z_analysis] {n} puzzles  |  accuracy = {n_correct}/{n} = {n_correct/n:.2%}")
+    print(f"ratings count:          {len(collector.ratings)}")
+    print(f"trajectories count:     {len(collector.trajectories)}")
+    print(f"z_L_trajectories count: {len(collector.z_L_trajectories)}")
+    print(f"correct_flags count:    {len(collector.correct_flags)}")
+    print(f"skipped count:          {n_skipped}")
 
     # ── save raw data ──────────────────────────────────────────────────────
     np.savez_compressed(
@@ -374,6 +387,7 @@ def run_z_analysis(
     wandb_log: dict = {}
 
     wandb_log["z_analysis/n_samples"]       = n
+    wandb_log["z_analysis/n_skipped"]       = n_skipped
     wandb_log["z_analysis/accuracy"]        = n_correct / n if n > 0 else 0.0
     wandb_log["z_analysis/hinit_pc1"] = float(proj_hinit_single[0, 0])
     wandb_log["z_analysis/hinit_pc2"] = float(proj_hinit_single[0, 1])
