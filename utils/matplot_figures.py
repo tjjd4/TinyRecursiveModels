@@ -379,8 +379,9 @@ def _plot_rating_distribution(ratings, flags, save_dir):
     flags_arr   = np.array(flags)
     
     r_max = int(np.percentile(ratings_arr, 99))  # trim extreme long tail
-    bins = np.arange(0, r_max + 2, 1)            # interval is 1
-    
+    r_min = int(ratings_arr.min())
+    bins = np.arange(r_min, r_max + 2, 1)            # interval is 1
+
     fig, axes = plt.subplots(2, 1, figsize=(14, 8), 
                               gridspec_kw={'height_ratios': [2, 1]})
     

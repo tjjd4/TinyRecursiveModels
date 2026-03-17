@@ -9,6 +9,13 @@ from pydantic import BaseModel
 from tqdm import tqdm
 from huggingface_hub import hf_hub_download
 
+import os
+import sys
+
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if parent_dir not in sys.path:
+    sys.path.append(parent_dir)
+
 from dataset.common import PuzzleDatasetMetadata
 
 
@@ -137,7 +144,7 @@ def convert_subset(set_name: str, config: DataProcessConfig):
     }
 
     # Metadata
-    metadata = PuzzleDatasetMetadata(
+    metadata = PuzzleDatasetMetadataWithRating(
         seq_len=81,
         vocab_size=10 + 1,  # PAD + "0" ... "9"
         pad_id=0,
