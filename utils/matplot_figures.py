@@ -394,7 +394,7 @@ def _plot_rating_distribution(ratings, flags, save_dir):
     ax.set_title("Rating Distribution: Correct vs Incorrect Puzzles", fontsize=12)
     ax.legend(fontsize=10)
     ax.grid(True, lw=0.3, alpha=0.5)
-    ax.set_xlim(0, r_max + 1)
+    ax.set_xlim(-1, r_max + 1)
     
     # ── incorrect rate per rating ───────────────────────────────
     ax2 = axes[1]
@@ -425,7 +425,7 @@ def _plot_rating_distribution(ratings, flags, save_dir):
     ax2.set_ylim(0, 1)
     ax2.legend(fontsize=9)
     ax2.grid(True, lw=0.3, alpha=0.5)
-    ax2.set_xlim(0, r_max + 1)
+    ax2.set_xlim(-1, r_max + 1)
     
     plt.tight_layout()
     return fig
@@ -450,19 +450,19 @@ def _plot_residual_vs_rating(residuals, ratings, flags, save_dir, z_label="z_H")
             ratings_arr[mask], final_resids[mask],
             color=color, alpha=0.3, s=8, label=label
         )
-        # 加一條 LOWESS 或 rolling mean 趨勢線
+        # Add a LOWESS or rolling mean trend line
         if mask.sum() > 10:
             sorted_idx = np.argsort(ratings_arr[mask])
             x_sorted = ratings_arr[mask][sorted_idx]
             y_sorted = final_resids[mask][sorted_idx]
-            # 用 rolling mean 做趨勢線
+            # Use rolling mean to make trend line
             window = max(1, len(x_sorted) // 20)
             y_smooth = np.convolve(y_sorted, np.ones(window)/window, mode='valid')
             x_smooth = x_sorted[window//2: window//2 + len(y_smooth)]
             ax.plot(x_smooth, y_smooth, color=color, lw=2.5, alpha=0.9)
     
     ax.set_xlabel("Puzzle Rating", fontsize=11)
-    ax.set_ylabel(f"Final Step Residual  ||{z_label}[T] - {z_label}[T-1]|| / √D", fontsize=10)
+    ax.set_ylabel(f"Final Step Residual  ||{z_label}[T] - {z_label}[T-1]||", fontsize=10)
     ax.set_title(f"{z_label} Final Residual vs Puzzle Difficulty Rating", fontsize=12)
     ax.legend(fontsize=10)
     ax.grid(True, lw=0.3, alpha=0.5)
@@ -477,10 +477,10 @@ def _plot_accuracy_vs_rating(flags, ratings, save_dir, n_bins=20):
     ratings_arr = np.array(ratings, dtype=float)
     flags_arr   = np.array(flags,   dtype=float)
     
-    # 用 percentile 邊界確保每個 bin 樣本數相近
+    # Use percentile boundaries to ensure similar sample count per bin
     percentiles = np.linspace(0, 100, n_bins + 1)
     bin_edges = np.percentile(ratings_arr, percentiles)
-    bin_edges = np.unique(bin_edges)  # 去掉重複邊界
+    bin_edges = np.unique(bin_edges)  # Remove duplicate edges
     
     bin_centers, accuracies, counts = [], [], []
     for i in range(len(bin_edges) - 1):
@@ -531,9 +531,9 @@ def _plot_residual_by_rating_colormap(residuals, ratings, flags, save_dir, z_lab
     r_min, r_max = ratings_arr.min(), ratings_arr.max()
     r_norm = (ratings_arr - r_min) / (r_max - r_min + 1e-8)
     
-    cmap = plt.cm.plasma  # 低 rating = 深色，高 rating = 亮色
+    cmap = plt.cm.coolwarm  # low rating = blue, high rating = red
     
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5), constrained_layout=True)
     
     for ax, is_correct, title in [
         (axes[0], True,  "Correct"),
@@ -548,7 +548,7 @@ def _plot_residual_by_rating_colormap(residuals, ratings, flags, save_dir, z_lab
             shown += 1
         
         ax.set_xlabel("Supervision Step Index #", fontsize=10)
-        ax.set_ylabel(f"||{z_label}[t] - {z_label}[t-1]|| / √D", fontsize=9)
+        ax.set_ylabel(f"||{z_label}[t] - {z_label}[t-1]||", fontsize=9)
         ax.set_title(f"{title}  (n={shown})", fontsize=11)
         ax.grid(True, lw=0.3, alpha=0.5)
     
@@ -558,5 +558,4 @@ def _plot_residual_by_rating_colormap(residuals, ratings, flags, save_dir, z_lab
     fig.colorbar(sm, ax=axes, label="Puzzle Rating", fraction=0.02, pad=0.04)
     
     plt.suptitle(f"{z_label} Forward Residual colored by Puzzle Rating", fontsize=12)
-    plt.tight_layout()
     return fig
