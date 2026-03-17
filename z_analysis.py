@@ -24,8 +24,7 @@ import hydra
 import pydantic
 from omegaconf import DictConfig
 
-from puzzle_dataset import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
-from utils.functions import load_model_class, get_model_source_path
+from utils.functions import load_model_class, get_model_source_path, load_checkpoint_from_path
 
 from models.losses.loss_fn import IGNORE_LABEL_ID
 
@@ -166,35 +165,7 @@ def init_train_state(config: EvalConfig, metadata: PuzzleDatasetMetadata, rank: 
     )
 
 def load_checkpoint(model: nn.Module, config: EvalConfig):
-    if config.load_checkpoint is not None:
-        print(f"Loading checkpoint {config.load_checkpoint}")
-
-        # Load state dict
-        state_dict = torch.load(config.load_checkpoint, map_location="cuda")
-
-        # Resize and reset puzzle emb if needed
-        puzzle_emb_name = "_orig_mod.model.inner.puzzle_emb.weights"
-        expected_shape: torch.Size = model.model.puzzle_emb.weights.shape  # type: ignore
-        if puzzle_emb_name in state_dict:
-            puzzle_emb = state_dict[puzzle_emb_name]
-            if puzzle_emb.shape != expected_shape:
-                print(f"Resetting puzzle embedding as shape is different. Found {puzzle_emb.shape}, Expected {expected_shape}")
-                # Re-initialize using mean
-                state_dict[puzzle_emb_name] = (
-                    torch.mean(puzzle_emb, dim=0, keepdim=True).expand(expected_shape).contiguous()
-                )
-
-        missing, unexpected = model.load_state_dict(state_dict, strict=False, assign=True)
-
-        if len(missing):
-            print(f"[train_rl.py] Missing keys (ok if head changed): {len(missing)}")
-            # print first few
-            for k in missing[:20]:
-                print("  missing:", k)
-        if len(unexpected):
-            print(f"[train_rl.py] Unexpected keys (ok if old head existed): {len(unexpected)}")
-            for k in unexpected[:20]:
-                print("  unexpected:", k)
+    load_checkpoint_from_path(model, config.load_checkpoint)
 
 def create_evaluators(config: EvalConfig, metadata: PuzzleDatasetMetadata) -> List[Any]:
     data_paths = config.data_paths_test if len(config.data_paths_test) > 0 else config.data_paths
