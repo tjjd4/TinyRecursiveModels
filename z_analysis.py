@@ -15,7 +15,6 @@ from sklearn.decomposition import PCA
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 
 import tqdm
 import wandb
@@ -24,7 +23,9 @@ import hydra
 import pydantic
 from omegaconf import DictConfig
 
+from puzzle_dataset_with_rating import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
 from utils.functions import load_model_class, get_model_source_path, load_checkpoint_from_path
+from utils.matplot_figures import _plot_pca_split, _plot_pca_combined, _plot_forward_residual, _plot_pca_variance, _plot_displacement_hist, _plot_step1_vs_final, _plot_hinit_vs_final, _plot_pos_residual_heatmap_given, _plot_pos_residual_heatmap_empty, _plot_pos_residual_by_step, _plot_rating_distribution, _plot_residual_vs_rating, _plot_accuracy_vs_rating, _plot_residual_by_rating_colormap
 
 from models.losses.loss_fn import IGNORE_LABEL_ID
 
@@ -199,6 +200,7 @@ class ZAnalysisCollector:
         self.trajectories  = []
         self.z_L_trajectories = []
         self.correct_flags = []
+        self.ratings       = []   # per-sample difficulty rating (optional)
         self.residuals     = []
         self.z_L_residuals = []
         self.pos_residuals = []
@@ -237,11 +239,12 @@ class ZAnalysisCollector:
             self._z_L_per_step_batch[b].append(z_L_cpu[b].mean(axis=0))
             self._z_H_pos_per_step_batch[b].append(z_H_cpu[b])
 
-    def end_batch(self, carry, labels, final_preds):
+    def end_batch(self, carry, labels, final_preds, ratings=None):
         """
         Call after the while-loop (all_finish=True).
         carry  : final carry (contains z_H of the last step already recorded)
         labels : (B, L_seq) ground-truth token ids
+        ratings : optional (B,) array of difficulty ratings for this batch
         """
         if not self._batch_open:
             return
@@ -260,20 +263,21 @@ class ZAnalysisCollector:
                 continue
             z_H_traj = np.stack(z_H_steps, axis=0)         # (T, D)
             z_L_traj = np.stack(z_L_steps, axis=0)
+            
+            self.ratings.append(int(ratings[b]))
+
             self.trajectories.append(z_H_traj)
             self.correct_flags.append(bool(correct_np[b]))
             self.z_L_trajectories.append(z_L_traj)
 
             if z_H_traj.shape[0] > 1:
                 diffs = np.linalg.norm(np.diff(z_H_traj, axis=0), axis=-1)   # (T-1,)
-                diffs = diffs / math.sqrt(z_H_traj.shape[1])                  # normalise by sqrt(D)
             else:
                 diffs = np.array([0.0])
             self.residuals.append(diffs)
 
             if z_L_traj.shape[0] > 1:
                 z_L_diffs = np.linalg.norm(np.diff(z_L_traj, axis=0), axis=-1)   # (T-1,)
-                z_L_diffs = z_L_diffs / math.sqrt(z_L_traj.shape[1])                  # normalise by sqrt(D)
             else:
                 z_L_diffs = np.array([0.0])
             self.z_L_residuals.append(z_L_diffs)
@@ -343,6 +347,11 @@ def run_z_analysis(
         [np.full(t.shape[0], si, dtype=int) for si, t in enumerate(sub_trajs)]
     )
 
+    cov_z_H = np.cov(all_z_H, rowvar=False)
+    pr_z_H = float((np.trace(cov_z_H)**2) / np.trace(cov_z_H.dot(cov_z_H)))
+    cov_z_L = np.cov(all_z_L, rowvar=False)
+    pr_z_L = float((np.trace(cov_z_L)**2) / np.trace(cov_z_L.dot(cov_z_L)))
+
     n_comp = min(config.z_analysis_pca_components, all_z_H.shape[1], all_z_H.shape[0])
     pca = PCA(n_components=n_comp, random_state=0)
     proj = pca.fit_transform(all_z_H)   # (sum_T, n_comp)
@@ -368,6 +377,8 @@ def run_z_analysis(
     wandb_log["z_analysis/accuracy"]        = n_correct / n if n > 0 else 0.0
     wandb_log["z_analysis/hinit_pc1"] = float(proj_hinit_single[0, 0])
     wandb_log["z_analysis/hinit_pc2"] = float(proj_hinit_single[0, 1])
+    wandb_log["z_analysis/pca_pr_z_H"] = pr_z_H
+    wandb_log["z_analysis/pca_pr_z_L"] = pr_z_L
     wandb_log["z_analysis/pca_pc1_var_pct"] = float(pca.explained_variance_ratio_[0] * 100)
     wandb_log["z_analysis/pca_pc2_var_pct"] = float(pca.explained_variance_ratio_[1] * 100)
     wandb_log["z_analysis/pca_top2_cumvar_pct"] = float(
@@ -432,6 +443,11 @@ def run_z_analysis(
     wandb_log["z_analysis/z_L_displacement_hist"] = _save_wandb(_plot_displacement_hist(collector.z_L_trajectories, collector.correct_flags, save_dir, z_label="z_L"), save_dir, "z_L_displacement_histogram.png")
     wandb_log["z_analysis/z_L_pca_step1_final"] = _save_wandb(_plot_step1_vs_final(proj_z_L, sample_ids, sub_flags, save_dir, z_label="z_L"), save_dir, "z_L_pca_step1_vs_final.png")
     wandb_log["z_analysis/z_L_pca_hinit_final"] = _save_wandb(_plot_hinit_vs_final(proj_inits_L, proj_z_L, sample_ids, sub_flags, save_dir, z_label="z_L"), save_dir, "z_L_pca_hinit_vs_final.png")
+    if collector.ratings:
+        wandb_log["z_analysis/rating_distribution"] = _save_wandb(_plot_rating_distribution(collector.ratings, collector.correct_flags, save_dir), save_dir, "rating_distribution.png")
+        wandb_log["z_analysis/residual_vs_rating"] = _save_wandb(_plot_residual_vs_rating(collector.residuals, collector.ratings, collector.correct_flags, save_dir), save_dir, "residual_vs_rating.png")
+        wandb_log["z_analysis/accuracy_vs_rating"] = _save_wandb(_plot_accuracy_vs_rating(collector.correct_flags, collector.ratings, save_dir), save_dir, "accuracy_vs_rating.png")
+        wandb_log["z_analysis/residual_colormap_rating"] = _save_wandb(_plot_residual_by_rating_colormap(collector.residuals, collector.ratings, collector.correct_flags, save_dir), save_dir, "residual_colormap_rating.png")
     # Drop None values (plots that returned None due to insufficient data)
     wandb_log = {k: v for k, v in wandb_log.items() if v is not None}
 
@@ -444,8 +460,6 @@ def run_z_analysis(
 
     print(f"[z_analysis] all plots saved to {save_dir}/")
 
-
-# ── individual plot functions (each returns fig for wandb logging) ─────────
 
 def _make_residual_table(residuals: List[np.ndarray], flags: List[bool]) -> Optional[wandb.Table]:
     """Build a wandb.Table of mean residual per step, split by correct/incorrect."""
@@ -489,383 +503,6 @@ def _save_wandb(fig, save_dir: str, filename: str) -> Optional[wandb.Image]:
     plt.close(fig)
     print(f"[z_analysis] saved {filename}")
     return wandb.Image(path)
-
-
-def _plot_pca_split(proj, sample_ids, flags, pca, save_dir, n_show=60, z_label="z_H"):
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-    correct_local = [i for i, f in enumerate(flags) if f]
-    incorrect_local = [i for i, f in enumerate(flags) if not f]
-
-    for ax, local_idxs, color, title in [
-        (axes[0], correct_local[:n_show], "steelblue", "Correct"),
-        (axes[1], incorrect_local[:n_show], "firebrick", "Incorrect"),
-    ]:
-        for li in local_idxs:
-            pts = proj[sample_ids == li]
-            T = pts.shape[0]
-            alphas = np.linspace(0.2, 1.0, max(T, 2))
-            for t in range(T - 1):
-                ax.plot(pts[t:t+2, 0], pts[t:t+2, 1],
-                        color=color, alpha=float(alphas[t]), lw=0.9)
-            ax.scatter(pts[0, 0],  pts[0, 1],  color=color, s=18, alpha=0.5, marker="o", zorder=3)
-            ax.scatter(pts[-1, 0], pts[-1, 1], color=color, s=40, alpha=0.9, marker="*", zorder=4)
-        ax.set_title(f"{title}  (n={len(local_idxs)})", fontsize=11)
-        ax.set_xlabel(f"PC1 ({pca.explained_variance_ratio_[0]*100:.1f}%)")
-        ax.set_ylabel(f"PC2 ({pca.explained_variance_ratio_[1]*100:.1f}%)")
-        ax.grid(True, lw=0.3, alpha=0.5)
-
-    plt.suptitle(f"TRM  {z_label}  PCA trajectories  ○=step1  ★=final", fontsize=11)
-    plt.tight_layout()
-    return fig
-
-
-def _plot_pca_combined(proj, sample_ids, flags, pca, save_dir, n_show=80, z_label="z_H"):
-    fig, ax = plt.subplots(figsize=(8, 7))
-    for li, is_correct in enumerate(flags[:n_show]):
-        color = "steelblue" if is_correct else "firebrick"
-        pts = proj[sample_ids == li]
-        T = pts.shape[0]
-        alphas = np.linspace(0.15, 0.7, max(T, 2))
-        for t in range(T - 1):
-            ax.plot(pts[t:t+2, 0], pts[t:t+2, 1],
-                    color=color, alpha=float(alphas[t]), lw=0.7)
-        ax.scatter(pts[-1, 0], pts[-1, 1], color=color, s=25, alpha=0.85, marker="*", zorder=4)
-
-    legend_elements = [
-        Line2D([0], [0], color="steelblue", lw=2, label="Correct"),
-        Line2D([0], [0], color="firebrick", lw=2, label="Incorrect"),
-        Line2D([0], [0], color="gray", lw=0, marker="*", markersize=8, label="Final step"),
-    ]
-    ax.legend(handles=legend_elements, fontsize=10)
-    ax.set_title(f"TRM  {z_label}  PCA trajectories  (correct vs incorrect)", fontsize=12)
-    ax.set_xlabel(f"PC1 ({pca.explained_variance_ratio_[0]*100:.1f}%)")
-    ax.set_ylabel(f"PC2 ({pca.explained_variance_ratio_[1]*100:.1f}%)")
-    ax.grid(True, lw=0.3, alpha=0.5)
-    plt.tight_layout()
-    return fig
-
-
-def _plot_forward_residual(residuals, flags, save_dir, z_label="z_H"):
-    max_T = max(r.shape[0] for r in residuals) if residuals else 0
-    if max_T == 0:
-        return None
-
-    def _mean_std(idxs):
-        padded = []
-        for i in idxs:
-            r = residuals[i]
-            if r.shape[0] < max_T:
-                r = np.pad(r, (0, max_T - r.shape[0]), constant_values=np.nan)
-            padded.append(r)
-        arr = np.array(padded)
-        return np.nanmean(arr, axis=0), np.nanstd(arr, axis=0)
-
-    correct_idxs = [i for i, f in enumerate(flags) if f]
-    incorrect_idxs = [i for i, f in enumerate(flags) if not f]
-    steps = np.arange(1, max_T + 1)
-
-    fig, ax = plt.subplots(figsize=(9, 4))
-    for idxs, label, color in [
-        (correct_idxs, "Correct", "steelblue"),
-        (incorrect_idxs, "Incorrect", "firebrick"),
-    ]:
-        if not idxs:
-            continue
-        mean, std = _mean_std(idxs)
-        ax.plot(steps, mean, color=color, lw=2, label=label)
-        ax.fill_between(steps, mean - std, mean + std, color=color, alpha=0.15)
-
-    ax.set_xlabel("Supervision Step Index #", fontsize=11)
-    ax.set_ylabel(f"||{z_label}[t] - {z_label}[t-1]|| / √D", fontsize=10)
-    ax.set_title(f"TRM  {z_label}  Forward Residual  (correct vs incorrect)", fontsize=12)
-    ax.legend(fontsize=10)
-    ax.grid(True, lw=0.3, alpha=0.5)
-    plt.tight_layout()
-    return fig
-
-
-def _plot_pca_variance(pca, save_dir, z_label="z_H"):
-    n = len(pca.explained_variance_ratio_)
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
-    axes[0].bar(range(1, n + 1), pca.explained_variance_ratio_ * 100, color="steelblue")
-    axes[0].set_xlabel("Principal Component")
-    axes[0].set_ylabel("Explained Variance (%)")
-    axes[0].set_title("Scree Plot")
-
-    cumvar = np.cumsum(pca.explained_variance_ratio_) * 100
-    axes[1].plot(range(1, n + 1), cumvar, "o-", color="steelblue")
-    axes[1].axhline(90, color="gray", linestyle="--", lw=0.8, label="90%")
-    axes[1].set_xlabel("# Principal Components")
-    axes[1].set_ylabel("Cumulative Variance (%)")
-    axes[1].set_title("Cumulative Variance")
-    axes[1].legend()
-
-    plt.suptitle(f"PCA of TRM  {z_label}  (mean-pooled over sequence positions)", fontsize=11)
-    plt.tight_layout()
-    return fig
-
-
-def _plot_displacement_hist(trajs, flags, save_dir, z_label="z_H"):
-    correct_disp, incorrect_disp = [], []
-    for traj, is_correct in zip(trajs, flags):
-        if traj.shape[0] > 1:
-            disp = float(np.linalg.norm(np.diff(traj, axis=0), axis=-1).sum())
-        else:
-            disp = 0.0
-        (correct_disp if is_correct else incorrect_disp).append(disp)
-
-    all_vals = correct_disp + incorrect_disp
-    if not all_vals:
-        return None
-    bins = np.linspace(min(all_vals), max(all_vals), 40)
-    fig, ax = plt.subplots(figsize=(8, 4))
-    ax.hist(correct_disp,   bins=bins, alpha=0.6, color="steelblue",
-            label=f"Correct  (n={len(correct_disp)})",   density=True)
-    ax.hist(incorrect_disp, bins=bins, alpha=0.6, color="firebrick",
-            label=f"Incorrect  (n={len(incorrect_disp)})", density=True)
-    ax.set_xlabel(f"Total {z_label} displacement  (sum of step-wise L2 norms)")
-    ax.set_ylabel("Density")
-    ax.set_title(f"{z_label} trajectory total displacement  (correct vs incorrect)")
-    ax.legend()
-    ax.grid(True, lw=0.3, alpha=0.5)
-    plt.tight_layout()
-    return fig
-
-
-def _plot_step1_vs_final(proj, sample_ids, flags, save_dir, z_label="z_H"):
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    for ax, is_c, color, title in [
-        (axes[0], True,  "steelblue", "Correct"),
-        (axes[1], False, "firebrick",  "Incorrect"),
-    ]:
-        s0, sF = [], []
-        for li, f in enumerate(flags):
-            if f != is_c:
-                continue
-            pts = proj[sample_ids == li]
-            if pts.shape[0] == 0:
-                continue
-            s0.append(pts[0])
-            sF.append(pts[-1])
-        if not s0:
-            ax.set_title(f"{title} (no data)")
-            continue
-        s0 = np.array(s0); sF = np.array(sF)
-        ax.scatter(s0[:, 0], s0[:, 1], alpha=0.3, s=12, color="gray",  label="Step 0", zorder=2)
-        ax.scatter(sF[:, 0], sF[:, 1], alpha=0.5, s=12, color=color,   label="Final",  zorder=3)
-        ax.set_title(f"{title}  (n={len(s0)})", fontsize=11)
-        ax.set_xlabel("PC1"); ax.set_ylabel("PC2")
-        ax.legend(fontsize=9)
-        ax.grid(True, lw=0.3, alpha=0.5)
-    plt.suptitle(f"{z_label} PCA: Step-0 vs Final step", fontsize=11)
-    plt.tight_layout()
-    return fig
-
-
-def _plot_hinit_vs_final(proj_inits, proj, sample_ids, flags, save_dir, z_label="z_H"):
-    """Init reset position (×) vs final step (★) for correct/incorrect."""
-    init_name = "H_init" if z_label == "z_H" else "L_init"
-    fig, ax = plt.subplots(figsize=(8, 7))
-
-    # Init points colored by correct/incorrect
-    for li, is_correct in enumerate(flags):
-        color = "steelblue" if is_correct else "firebrick"
-        ax.scatter(proj_inits[li, 0], proj_inits[li, 1],
-                   color=color, s=25, alpha=0.3, marker="x", zorder=5)
-
-    # Final step, colored by correct/incorrect
-    for li, is_correct in enumerate(flags):
-        color = "steelblue" if is_correct else "firebrick"
-        pts = proj[sample_ids == li]
-        if pts.shape[0] == 0:
-            continue
-        ax.scatter(pts[-1, 0], pts[-1, 1],
-                   color=color, s=15, alpha=0.5, marker="*", zorder=3)
-
-    legend_elements = [
-        Line2D([0], [0], color="steelblue", lw=0, marker="x", markersize=9, alpha=0.4,
-               label=f"{init_name} → correct"),
-        Line2D([0], [0], color="firebrick", lw=0, marker="x", markersize=9, alpha=0.4,
-               label=f"{init_name} → incorrect"),
-        Line2D([0], [0], color="steelblue", lw=0, marker="*", markersize=9,
-               label="Final (correct)"),
-        Line2D([0], [0], color="firebrick", lw=0, marker="*", markersize=9,
-               label="Final (incorrect)"),
-    ]
-    ax.legend(handles=legend_elements, fontsize=10)
-    ax.set_title(f"{init_name} reset position vs Final step  (PCA space)", fontsize=12)
-    ax.set_xlabel("PC1"); ax.set_ylabel("PC2")
-    ax.grid(True, lw=0.3, alpha=0.5)
-    plt.tight_layout()
-    return fig
-
-
-def _plot_pos_residual_heatmap_role(
-    pos_residuals: List[np.ndarray],   # per-puzzle (T-1, L_full)
-    given_masks: List[np.ndarray],     # per-puzzle (81,) bool
-    flags: List[bool],
-    role: str,                         # "given" or "empty"
-    puzzle_emb_len,
-):
-    """
-    9x9 heatmap with conditional averaging: only count a cell's residual
-    when it matches the target *role* in that puzzle.
-    Left: correct puzzles, Right: incorrect puzzles.
-    Grey cells = no data (that cell never appeared as the target role).
-    """
-    assert role in ("given", "empty")
-    is_target = True if role == "given" else False   # mask value to select
-
-    correct_idxs   = [i for i, f in enumerate(flags) if f]
-    incorrect_idxs = [i for i, f in enumerate(flags) if not f]
-
-    def _mean_grid(idxs):
-        """Conditional average: only accumulate when cell role matches."""
-        if not idxs:
-            return None
-        accum = np.zeros(81, dtype=np.float64)
-        count = np.zeros(81, dtype=np.float64)
-        for i in idxs:
-            r = pos_residuals[i]                                  # (T-1, L_full)
-            cell_r = r[:, puzzle_emb_len:puzzle_emb_len + 81]     # (T-1, 81)
-            cell_mean = cell_r.mean(axis=0)                       # (81,)
-            gm = given_masks[i]                                   # (81,) bool
-            sel = gm if is_target else ~gm
-            accum[sel] += cell_mean[sel]
-            count[sel] += 1
-        grid = np.where(count > 0, accum / count, np.nan)
-        return grid.reshape(9, 9)
-
-    grid_c = _mean_grid(correct_idxs)
-    grid_i = _mean_grid(incorrect_idxs)
-
-    grids = [g for g in [grid_c, grid_i] if g is not None]
-    if not grids:
-        return None
-    vmin = float(np.nanmin([np.nanmin(g) for g in grids]))
-    vmax = float(np.nanmax([np.nanmax(g) for g in grids]))
-
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    for ax, grid, title in [
-        (axes[0], grid_c, f"Correct  (n={len(correct_idxs)})"),
-        (axes[1], grid_i, f"Incorrect  (n={len(incorrect_idxs)})"),
-    ]:
-        if grid is None:
-            ax.set_title(f"{title}\n(no data)")
-            continue
-        im = ax.imshow(grid, vmin=vmin, vmax=vmax, cmap="hot_r", aspect="equal")
-        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-
-        # Mark cells with no data (NaN) as grey hatched
-        for r in range(9):
-            for c in range(9):
-                if np.isnan(grid[r, c]):
-                    rect = plt.Rectangle(
-                        (c - 0.5, r - 0.5), 1, 1,
-                        linewidth=0, facecolor="lightgrey", zorder=0
-                    )
-                    ax.add_patch(rect)
-
-        # 3x3 box lines
-        for line in [2.5, 5.5]:
-            ax.axhline(line, color="white", lw=1.5)
-            ax.axvline(line, color="white", lw=1.5)
-
-        ax.set_title(title, fontsize=11)
-        ax.set_xticks(range(9))
-        ax.set_yticks(range(9))
-
-    role_label = "Given" if role == "given" else "Empty"
-    plt.suptitle(
-        f"z_H Per-Cell Mean Residual — {role_label} Cells Only\n"
-        "Grey = no data for that role,  Bright = high activity",
-        fontsize=11
-    )
-    plt.tight_layout()
-    return fig
-
-
-def _plot_pos_residual_heatmap_given(pos_residuals, given_masks, flags, puzzle_emb_len):
-    return _plot_pos_residual_heatmap_role(pos_residuals, given_masks, flags, role="given", puzzle_emb_len=puzzle_emb_len)
-
-
-def _plot_pos_residual_heatmap_empty(pos_residuals, given_masks, flags, puzzle_emb_len):
-    return _plot_pos_residual_heatmap_role(pos_residuals, given_masks, flags, role="empty", puzzle_emb_len=puzzle_emb_len)
-
-
-def _plot_pos_residual_by_step(
-    pos_residuals: List[np.ndarray],
-    given_masks: List[np.ndarray],
-    flags: List[bool],
-    puzzle_emb_len: int = 2,
-):
-    """
-    Line plot: average residual of given cells vs empty cells as step changes.
-    Each draws two lines for correct and incorrect (four lines in total).
-    """
-    correct_idxs   = [i for i, f in enumerate(flags) if f]
-    incorrect_idxs = [i for i, f in enumerate(flags) if not f]
-
-    max_T = max(r.shape[0] for r in pos_residuals) if pos_residuals else 0
-    if max_T == 0:
-        return None
-
-    def _given_empty_mean_by_step(idxs):
-        """
-        Return (max_T, 2): [:, 0] = given mean, [:, 1] = empty mean
-        """
-        if not idxs:
-            return None
-        given_steps  = [[] for _ in range(max_T)]
-        empty_steps  = [[] for _ in range(max_T)]
-        for i in idxs:
-            r     = pos_residuals[i]                              # (T-1, L_full)
-            cells = r[:, puzzle_emb_len:puzzle_emb_len + 81]     # (T-1, 81)
-            gm    = given_masks[i]                                # (81,) bool
-            T     = cells.shape[0]
-            for t in range(max_T):
-                if t < T:
-                    given_steps[t].extend(cells[t, gm].tolist())
-                    empty_steps[t].extend(cells[t, ~gm].tolist())
-        given_mean = np.array([np.mean(v) if v else np.nan for v in given_steps])
-        empty_mean = np.array([np.mean(v) if v else np.nan for v in empty_steps])
-        return np.stack([given_mean, empty_mean], axis=1)   # (max_T, 2)
-
-    res_c = _given_empty_mean_by_step(correct_idxs)
-    res_i = _given_empty_mean_by_step(incorrect_idxs)
-
-    steps = np.arange(1, max_T + 1)
-    fig, ax = plt.subplots(figsize=(9, 4))
-
-    styles = {
-        ("correct",   "given"): ("steelblue", "-",  "Correct / Given"),
-        ("correct",   "empty"): ("steelblue", "--", "Correct / Empty"),
-        ("incorrect", "given"): ("firebrick",  "-",  "Incorrect / Given"),
-        ("incorrect", "empty"): ("firebrick",  "--", "Incorrect / Empty"),
-    }
-    for (group, cell_type), (color, ls, label) in styles.items():
-        res = res_c if group == "correct" else res_i
-        if res is None:
-            continue
-        col = 0 if cell_type == "given" else 1
-        ax.plot(steps, res[:, col], color=color, linestyle=ls, lw=2, label=label)
-
-    ax.set_xlabel("Supervision Step Index #", fontsize=11)
-    ax.set_ylabel("||z_H[t] - z_H[t-1]|| / sqrt(D)  (per cell)", fontsize=10)
-    ax.set_title("z_H Per-Cell Residual: Given vs Empty Cells", fontsize=12)
-    ax.legend(fontsize=10)
-    ax.grid(True, lw=0.3, alpha=0.5)
-    plt.tight_layout()
-    return fig
-
-
-def _save(fig, save_dir, filename):
-    """Legacy helper kept for compatibility. Prefer _save_wandb."""
-    path = os.path.join(save_dir, filename)
-    fig.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"[z_analysis] saved {filename}")
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # EVALUATE  (original function, minimally extended)
@@ -948,8 +585,11 @@ def evaluate(
 
             # ── z collector: end batch (new) ──────────────────────────────
             if collect_this_batch:
+                batch_ratings = batch.get("ratings")
+                if batch_ratings is not None:
+                    batch_ratings = batch_ratings.cpu().numpy()
                 with torch.inference_mode():
-                    z_collector.end_batch(carry, carry.current_data["labels"], preds["preds"])
+                    z_collector.end_batch(carry, carry.current_data["labels"], preds["preds"], ratings=batch_ratings)
                 z_batches_collected += 1
 
             if rank == 0 and progress_bar is not None:
