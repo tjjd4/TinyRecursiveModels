@@ -53,12 +53,25 @@ load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t
 Replace load_checkpoint with the path to the model checkpoint downloaded from HuggingFace
 
 ```bash
-run_name="eval_hrm_huggingface"
+run_name="eval_trm_mlp_t_sudoku_huggingface"
+python z_analysis.py \
+arch=trm \
+data_paths="[data/sudoku-extreme-1k-aug-1000]" \
+evaluators="[]" \
+arch.mlp_t=True arch.pos_encodings=none \
+arch.L_layers=2 \
+arch.H_cycles=3 arch.L_cycles=6 \
+load_checkpoint="checkpoints/Sudoku/trm-mlp-hf/checkpoint" \
++run_name=${run_name}
+```
+
+```bash
+run_name="eval_hrm_sudoku_huggingface"
 python z_analysis.py \
 arch=hrm \
 data_paths="[data/sudoku-extreme-1k-aug-1000]" \
 evaluators="[]" \
-load_checkpoint="checkpoints/Sudoku-hrm-hf/checkpoint" \
+load_checkpoint="checkpoints/Sudoku/hrm-hf/checkpoint" \
 +run_name=${run_name}
 ```
 
