@@ -529,8 +529,9 @@ def _plot_residual_by_rating_colormap(residuals, ratings, flags, save_dir, z_lab
     flags_arr   = np.array(flags[:n_show])
     
     # Normalize rating to [0, 1] for colormap
-    r_min, r_max = ratings_arr.min(), ratings_arr.max()
-    r_norm = (ratings_arr - r_min) / (r_max - r_min + 1e-8)
+    r_log = np.log1p(ratings_arr)          # log(1 + rating), avoid log(0)
+    r_min, r_max = r_log.min(), r_log.max()
+    r_norm = (r_log - r_min) / (r_max - r_min + 1e-8)
     
     cmap = plt.cm.coolwarm  # low rating = blue, high rating = red
     
@@ -556,7 +557,7 @@ def _plot_residual_by_rating_colormap(residuals, ratings, flags, save_dir, z_lab
     # Colorbar
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=r_min, vmax=r_max))
     sm.set_array([])
-    fig.colorbar(sm, ax=axes, label="Puzzle Rating", fraction=0.02, pad=0.04)
+    fig.colorbar(sm, ax=axes, label="log(1 + Puzzle Rating)", fraction=0.02, pad=0.04)
     
     plt.suptitle(f"{z_label} Forward Residual colored by Puzzle Rating", fontsize=12)
     return fig
