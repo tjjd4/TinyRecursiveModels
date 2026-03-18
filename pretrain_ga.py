@@ -625,6 +625,10 @@ def launch(hydra_config: DictConfig):
     # Train state
     train_state = init_train_state(config, train_metadata, rank=RANK, world_size=WORLD_SIZE)
 
+    param_names = [name for name, _ in train_state.model.named_parameters()]
+    print("H_init in parameters:", any("H_init" in n for n in param_names))
+    print("L_init in parameters:", any("L_init" in n for n in param_names))
+
     # Progress bar and logger
     progress_bar = None
     ema_helper = None
