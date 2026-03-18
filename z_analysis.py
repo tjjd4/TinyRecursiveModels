@@ -325,7 +325,7 @@ def run_z_analysis(
     n = collector.n_samples
     n_skipped = collector.n_skipped
     n_correct = sum(collector.correct_flags)
-    puzzle_emb_len = config.arch.puzzle_emb_len if hasattr(config.arch, "puzzle_emb_len") else 0
+    puzzle_emb_len = config.arch.puzzle_emb_len if hasattr(config.arch, "puzzle_emb_len") else (train_state.model.model.inner.puzzle_emb_len if hasattr(train_state.model.model.inner, "puzzle_emb_len") else 1)
     print(f"\n[z_analysis] {n} puzzles  |  accuracy = {n_correct}/{n} = {n_correct/n:.2%}")
     print(f"ratings count:          {len(collector.ratings)}")
     print(f"trajectories count:     {len(collector.trajectories)}")
@@ -355,34 +355,42 @@ def run_z_analysis(
     sub_z_L_trajs = [z_L_trajs[i] for i in idxs]
     sub_flags = [collector.correct_flags[i] for i in idxs]
 
-    all_z_H = np.concatenate(sub_trajs, axis=0)    # (sum_T, D)
-    all_z_L = np.concatenate(sub_z_L_trajs, axis=0)
     sample_ids = np.concatenate(
         [np.full(t.shape[0], si, dtype=int) for si, t in enumerate(sub_trajs)]
     )
 
-    cov_z_H = np.cov(all_z_H, rowvar=False)
-    pr_z_H = float((np.trace(cov_z_H)**2) / np.trace(cov_z_H.dot(cov_z_H)))
-    cov_z_L = np.cov(all_z_L, rowvar=False)
-    pr_z_L = float((np.trace(cov_z_L)**2) / np.trace(cov_z_L.dot(cov_z_L)))
+    all_z_H_full = np.concatenate(trajs, axis=0)
+    all_z_L_full = np.concatenate(z_L_trajs, axis=0)
 
-    n_comp = min(config.z_analysis_pca_components, all_z_H.shape[1], all_z_H.shape[0])
+    all_z_H_sub = np.concatenate(sub_trajs, axis=0)
+    all_z_L_sub = np.concatenate(sub_z_L_trajs, axis=0)
+
+    cov_z_H = np.cov(all_z_H_full, rowvar=False)
+    pr_z_H = float((np.trace(cov_z_H)**2) / np.trace(cov_z_H.dot(cov_z_H)))
+    del cov_z_H
+    cov_z_L = np.cov(all_z_L_full, rowvar=False)
+    pr_z_L = float((np.trace(cov_z_L)**2) / np.trace(cov_z_L.dot(cov_z_L)))
+    del cov_z_L
+
+    n_comp = min(config.z_analysis_pca_components, all_z_H_full.shape[1], all_z_H_full.shape[0])
     pca = PCA(n_components=n_comp, random_state=0)
-    proj = pca.fit_transform(all_z_H)   # (sum_T, n_comp)
+    pca.fit(all_z_H_full)
+    proj = pca.transform(all_z_H_sub)
 
     h_init = train_state.model.model.inner.H_init
     h_init_vec = h_init.float().cpu().numpy().reshape(1, -1)
     proj_hinit_single = pca.transform(h_init_vec)[:, :2]   # (1, 2)
     proj_inits = np.repeat(proj_hinit_single, len(sub_trajs), axis=0)  # (N, 2)
 
-    n_comp_L = min(config.z_analysis_pca_components, all_z_L.shape[1], all_z_L.shape[0])
+    n_comp_L = min(config.z_analysis_pca_components, all_z_L_full.shape[1], all_z_L_full.shape[0])
     pca_L = PCA(n_components=n_comp_L, random_state=0)
-    proj_z_L = pca_L.fit_transform(all_z_L)   # (sum_T, n_comp_L)
+    pca_L.fit(all_z_L_full)
+    proj_z_L = pca_L.transform(all_z_L_sub)
 
     l_init = train_state.model.model.inner.L_init
     l_init_vec = l_init.float().cpu().numpy().reshape(1, -1)
     proj_linit_single = pca_L.transform(l_init_vec)[:, :2]   # (1, 2)
-    proj_inits_L = np.repeat(proj_linit_single, len(sub_trajs), axis=0)  # (N, 2)
+    proj_inits_L = np.repeat(proj_linit_single, len(sub_z_L_trajs), axis=0)  # (N, 2)
 
     # ── scalar metrics ─────────────────────────────────────────────────────
     wandb_log: dict = {}
