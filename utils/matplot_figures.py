@@ -29,7 +29,7 @@ def _plot_pca_split(proj, sample_ids, flags, pca, save_dir, n_show=60, z_label="
         ax.set_ylabel(f"PC2 ({pca.explained_variance_ratio_[1]*100:.1f}%)")
         ax.grid(True, lw=0.3, alpha=0.5)
 
-    plt.suptitle(f"TRM  {z_label}  PCA trajectories  ○=step1  ★=final", fontsize=11)
+    plt.suptitle(f"{z_label}  PCA trajectories  ○=step1  ★=final", fontsize=11)
     plt.tight_layout()
     return fig
 
@@ -52,7 +52,7 @@ def _plot_pca_combined(proj, sample_ids, flags, pca, save_dir, n_show=80, z_labe
         Line2D([0], [0], color="gray", lw=0, marker="*", markersize=8, label="Final step"),
     ]
     ax.legend(handles=legend_elements, fontsize=10)
-    ax.set_title(f"TRM  {z_label}  PCA trajectories  (correct vs incorrect)", fontsize=12)
+    ax.set_title(f"{z_label}  PCA trajectories  (correct vs incorrect)", fontsize=12)
     ax.set_xlabel(f"PC1 ({pca.explained_variance_ratio_[0]*100:.1f}%)")
     ax.set_ylabel(f"PC2 ({pca.explained_variance_ratio_[1]*100:.1f}%)")
     ax.grid(True, lw=0.3, alpha=0.5)
@@ -92,7 +92,7 @@ def _plot_forward_residual(residuals, flags, save_dir, z_label="z_H"):
 
     ax.set_xlabel("Supervision Step Index #", fontsize=11)
     ax.set_ylabel(f"||{z_label}[t] - {z_label}[t-1]||", fontsize=10)
-    ax.set_title(f"TRM  {z_label}  Forward Residual  (correct vs incorrect)", fontsize=12)
+    ax.set_title(f"{z_label}  Forward Residual  (correct vs incorrect)", fontsize=12)
     ax.legend(fontsize=10)
     ax.grid(True, lw=0.3, alpha=0.5)
     plt.tight_layout()
@@ -115,7 +115,7 @@ def _plot_pca_variance(pca, save_dir, z_label="z_H"):
     axes[1].set_title("Cumulative Variance")
     axes[1].legend()
 
-    plt.suptitle(f"PCA of TRM  {z_label}  (mean-pooled over sequence positions)", fontsize=11)
+    plt.suptitle(f"{z_label} PCA (mean-pooled over sequence positions)", fontsize=11)
     plt.tight_layout()
     return fig
 
