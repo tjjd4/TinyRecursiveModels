@@ -312,7 +312,7 @@ def _plot_pos_residual_by_step(
     pos_residuals: List[np.ndarray],
     given_masks: List[np.ndarray],
     flags: List[bool],
-    puzzle_emb_len: int = 2,
+    puzzle_emb_len: int,
 ):
     """
     Line plot: average residual of given cells vs empty cells as step changes.

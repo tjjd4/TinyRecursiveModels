@@ -325,6 +325,7 @@ def run_z_analysis(
     n = collector.n_samples
     n_skipped = collector.n_skipped
     n_correct = sum(collector.correct_flags)
+    puzzle_emb_len = config.arch.puzzle_emb_len if hasattr(config.arch, "puzzle_emb_len") else 0
     print(f"\n[z_analysis] {n} puzzles  |  accuracy = {n_correct}/{n} = {n_correct/n:.2%}")
     print(f"ratings count:          {len(collector.ratings)}")
     print(f"trajectories count:     {len(collector.trajectories)}")
@@ -446,9 +447,9 @@ def run_z_analysis(
     wandb_log["z_analysis/z_H_displacement_hist"] = _save_wandb(_plot_displacement_hist(collector.trajectories, collector.correct_flags, save_dir, z_label="z_H"), save_dir, "z_H_displacement_histogram.png")
     wandb_log["z_analysis/z_H_pca_step1_final"] = _save_wandb(_plot_step1_vs_final(proj, sample_ids, sub_flags, save_dir, z_label="z_H"), save_dir, "z_H_pca_step1_vs_final.png")
     wandb_log["z_analysis/z_H_pca_hinit_final"] = _save_wandb(_plot_hinit_vs_final(proj_inits, proj, sample_ids, sub_flags, save_dir, z_label="z_H"), save_dir, "z_H_pca_hinit_vs_final.png")
-    wandb_log["z_analysis/z_H_pos_residual_heatmap_given"] = _save_wandb(_plot_pos_residual_heatmap_given(collector.pos_residuals, collector.given_masks, collector.correct_flags, puzzle_emb_len=config.arch.puzzle_emb_len), save_dir, "z_H_pos_residual_heatmap_given.png")
-    wandb_log["z_analysis/z_H_pos_residual_heatmap_empty"] = _save_wandb(_plot_pos_residual_heatmap_empty(collector.pos_residuals, collector.given_masks, collector.correct_flags, puzzle_emb_len=config.arch.puzzle_emb_len), save_dir, "z_H_pos_residual_heatmap_empty.png")
-    wandb_log["z_analysis/z_H_pos_residual_by_step"] = _save_wandb(_plot_pos_residual_by_step(collector.pos_residuals, collector.given_masks, collector.correct_flags, puzzle_emb_len=config.arch.puzzle_emb_len), save_dir, "z_H_pos_residual_by_step.png")
+    wandb_log["z_analysis/z_H_pos_residual_heatmap_given"] = _save_wandb(_plot_pos_residual_heatmap_given(collector.pos_residuals, collector.given_masks, collector.correct_flags, puzzle_emb_len=puzzle_emb_len), save_dir, "z_H_pos_residual_heatmap_given.png")
+    wandb_log["z_analysis/z_H_pos_residual_heatmap_empty"] = _save_wandb(_plot_pos_residual_heatmap_empty(collector.pos_residuals, collector.given_masks, collector.correct_flags, puzzle_emb_len=puzzle_emb_len), save_dir, "z_H_pos_residual_heatmap_empty.png")
+    wandb_log["z_analysis/z_H_pos_residual_by_step"] = _save_wandb(_plot_pos_residual_by_step(collector.pos_residuals, collector.given_masks, collector.correct_flags, puzzle_emb_len=puzzle_emb_len), save_dir, "z_H_pos_residual_by_step.png")
     
     wandb_log["z_analysis/z_L_pca_split"] = _save_wandb(_plot_pca_split(proj_z_L, sample_ids, sub_flags, pca_L, save_dir, z_label="z_L"), save_dir, "z_L_trajectory_pca_split.png")
     wandb_log["z_analysis/z_L_pca_combined"] = _save_wandb(_plot_pca_combined(proj_z_L, sample_ids, sub_flags, pca_L, save_dir, z_label="z_L"), save_dir, "z_L_trajectory_pca_combined.png")
