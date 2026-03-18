@@ -58,9 +58,6 @@ python z_analysis.py \
 arch=hrm \
 data_paths="[data/sudoku-extreme-1k-aug-1000]" \
 evaluators="[]" \
-arch.mlp_t=True arch.pos_encodings=none \
-arch.L_layers=2 \
-arch.H_cycles=3 arch.L_cycles=6 \
 load_checkpoint="checkpoints/Sudoku-hrm-hf/checkpoint" \
 +run_name=${run_name}
 ```
