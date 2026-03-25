@@ -25,9 +25,10 @@ from omegaconf import DictConfig
 
 from puzzle_dataset_with_rating import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
 from utils.functions import load_model_class, get_model_source_path, load_checkpoint_from_path
-from utils.matplot_figures import _plot_pca_split, _plot_pca_combined, _plot_forward_residual, _plot_pca_variance, _plot_displacement_hist, _plot_step1_vs_final, _plot_hinit_vs_final, _plot_pos_residual_heatmap_given, _plot_pos_residual_heatmap_empty, _plot_pos_residual_by_step, _plot_rating_distribution, _plot_residual_vs_rating, _plot_accuracy_vs_rating, _plot_residual_by_rating_colormap
+from utils.matplot_figures import _plot_pca_split, _plot_pca_combined, _plot_forward_residual, _plot_pca_variance, _plot_displacement_hist, _plot_step1_vs_final, _plot_hinit_vs_final, _plot_pos_residual_heatmap_given, _plot_pos_residual_heatmap_empty, _plot_pos_residual_by_step, _plot_rating_distribution, _plot_residual_vs_rating, _plot_accuracy_vs_rating, _plot_residual_by_rating_colormap, _plot_recursion_residual
 
 from models.losses.loss_fn import IGNORE_LABEL_ID
+from models.recursive_reasoning.trm_trace import ZTrace
 
 
 class LossConfig(pydantic.BaseModel):
@@ -46,7 +47,7 @@ class EvaluatorConfig(pydantic.BaseModel):
     name: str
 
 
-class EvalConfig(pydantic.BaseModel):
+class TraceConfig(pydantic.BaseModel):
     # Config
     arch: ArchConfig
     
@@ -74,11 +75,12 @@ class EvalConfig(pydantic.BaseModel):
     seed: int = 0
     eval_save_outputs: List[str] = []
 
-    # Z analysis (new)
-    z_analysis: bool = True
-    z_analysis_max_batches: int = 100
-    z_analysis_max_samples_pca: int = 256
-    z_analysis_pca_components: int = 10
+    # Z analysis
+    z_analysis_max_samples: int
+    z_analysis_max_samples_pca: int
+    z_analysis_pca_components: int
+    rec_max_correct: int
+    rec_max_incorrect: int
 
 
 @dataclass
@@ -88,7 +90,7 @@ class TrainState:
     step: int
     total_steps: int
 
-def create_dataloader(config: EvalConfig, split: str, rank: int, world_size: int, **kwargs):
+def create_dataloader(config: TraceConfig, split: str, rank: int, world_size: int, **kwargs):
     dataset = PuzzleDataset(PuzzleDatasetConfig(
         seed=config.seed,
         dataset_paths=config.data_paths_test if len(config.data_paths_test) > 0 and split == "test" else config.data_paths,
@@ -115,7 +117,7 @@ def create_dataloader(config: EvalConfig, split: str, rank: int, world_size: int
     return dataloader, dataset.metadata
 
 
-def load_model_from_checkpoint(config: EvalConfig, metadata: PuzzleDatasetMetadata, rank: int, world_size: int):
+def load_model_from_checkpoint(config: TraceConfig, metadata: PuzzleDatasetMetadata, rank: int, world_size: int):
     model_cfg = dict(
         **config.arch.__pydantic_extra__,  # type: ignore
         batch_size=config.global_batch_size // world_size,
@@ -150,7 +152,7 @@ def load_model_from_checkpoint(config: EvalConfig, metadata: PuzzleDatasetMetada
 
     return model
 
-def init_train_state(config: EvalConfig, metadata: PuzzleDatasetMetadata, rank: int, world_size: int):
+def init_train_state(config: TraceConfig, metadata: PuzzleDatasetMetadata, rank: int, world_size: int):
     # Estimated total training steps
     total_steps = math.ceil(metadata.total_puzzles * metadata.mean_puzzle_examples / config.global_batch_size)
 
@@ -165,10 +167,10 @@ def init_train_state(config: EvalConfig, metadata: PuzzleDatasetMetadata, rank: 
         carry=None
     )
 
-def load_checkpoint(model: nn.Module, config: EvalConfig):
+def load_checkpoint(model: nn.Module, config: TraceConfig):
     load_checkpoint_from_path(model, config.load_checkpoint)
 
-def create_evaluators(config: EvalConfig, metadata: PuzzleDatasetMetadata) -> List[Any]:
+def create_evaluators(config: TraceConfig, metadata: PuzzleDatasetMetadata) -> List[Any]:
     data_paths = config.data_paths_test if len(config.data_paths_test) > 0 else config.data_paths
     # Initialize evaluators
     evaluators = []
@@ -182,136 +184,9 @@ def create_evaluators(config: EvalConfig, metadata: PuzzleDatasetMetadata) -> Li
     return evaluators
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Z ANALYSIS  (new, self-contained section)
-# ─────────────────────────────────────────────────────────────────────────────
-
-@dataclass
-class ZAnalysisCollector:
-    """Accumulates z_H snapshots and correctness flags across batches."""
-    # Per-puzzle: list of (T_steps, L, D) float32 arrays (mean-pooled over L → (T,D))
-    trajectories: List[np.ndarray] = None   # filled after collection
-    z_L_trajectories: List[np.ndarray] = None
-    correct_flags: List[bool] = None
-    residuals: List[np.ndarray] = None      # per-puzzle (T-1,) arrays
-    z_L_residuals: List[np.ndarray] = None
-
-    def __post_init__(self):
-        self.trajectories  = []
-        self.z_L_trajectories = []
-        self.correct_flags = []
-        self.ratings       = []   # per-sample difficulty rating (optional)
-        self.residuals     = []
-        self.z_L_residuals = []
-        self.pos_residuals = []
-        self.given_masks   = []
-        self.n_skipped     = 0
-
-        # Internal accumulation buffers keyed by puzzle index in a batch
-        self._z_H_per_step_batch: List[List[np.ndarray]] = []  # reset each batch
-        self._z_L_per_step_batch: List[List[np.ndarray]] = []  # reset each batch
-        self._z_H_pos_per_step_batch = []
-        self._batch_open: bool = False
-
-    def begin_batch(self, batch, config: EvalConfig):
-        """Call once before the while-loop for each batch."""
-        batch_size = config.global_batch_size
-        self._z_H_per_step_batch = [[] for _ in range(batch_size)]
-        self._z_L_per_step_batch = [[] for _ in range(batch_size)]
-        self._z_H_pos_per_step_batch = [[] for _ in range(batch_size)]
-        self._batch_open = True
-        inputs_np = batch["inputs"].cpu().numpy()   # (B, seq_len)
-        self._given_masks_batch = []
-        for b in range(batch_size):
-            cell_inputs = inputs_np[b, :81]   # (81,) cell labels
-            given = cell_inputs != 1
-            self._given_masks_batch.append(given)
-
-    def record_step(self, carry):
-        """Call inside the while-loop after every model forward, passing the new carry."""
-        if not self._batch_open:
-            return
-        # carry.inner_carry.z_H : (B, L, D)
-        z_H_cpu = carry.inner_carry.z_H.float().cpu().numpy()
-        z_L_cpu = carry.inner_carry.z_L.float().cpu().numpy()
-        for b in range(z_H_cpu.shape[0]):
-            # Mean-pool over sequence positions → (D,)  to save memory
-            self._z_H_per_step_batch[b].append(z_H_cpu[b].mean(axis=0))
-            self._z_L_per_step_batch[b].append(z_L_cpu[b].mean(axis=0))
-            self._z_H_pos_per_step_batch[b].append(z_H_cpu[b])
-
-    def end_batch(self, carry, labels, final_preds, ratings=None):
-        """
-        Call after the while-loop (all_finish=True).
-        carry  : final carry (contains z_H of the last step already recorded)
-        labels : (B, L_seq) ground-truth token ids
-        ratings : optional (B,) array of difficulty ratings for this batch
-        """
-        if not self._batch_open:
-            return
-
-        # Determine per-puzzle correctness from final prediction
-        preds = final_preds
-        mask = (labels != -100)
-        correct = ((preds == labels) & mask).sum(-1) == mask.sum(-1)  # (B,) bool
-        correct_np = correct.cpu().numpy()
-
-        B = len(self._z_H_per_step_batch)
-        for b in range(B):
-            z_H_steps = self._z_H_per_step_batch[b]   # list of (D,) arrays
-            z_L_steps = self._z_L_per_step_batch[b]
-
-            has_trajectory = len(z_H_steps) > 0 and len(z_L_steps) > 0
-            has_rating     = (ratings is not None) and (b < len(ratings))
-            has_pos        = len(self._z_H_pos_per_step_batch[b]) > 0
-            has_given_mask = b < len(self._given_masks_batch)
-
-            if not (has_trajectory and has_rating and has_pos and has_given_mask):
-                self.n_skipped += 1
-                continue
-
-            z_H_traj = np.stack(z_H_steps, axis=0)         # (T, D)
-            z_L_traj = np.stack(z_L_steps, axis=0)
-            
-            self.ratings.append(int(ratings[b]))
-            self.trajectories.append(z_H_traj)
-            self.correct_flags.append(bool(correct_np[b]))
-            self.z_L_trajectories.append(z_L_traj)
-
-            if z_H_traj.shape[0] > 1:
-                diffs = np.linalg.norm(np.diff(z_H_traj, axis=0), axis=-1)   # (T-1,)
-            else:
-                diffs = np.array([0.0])
-            self.residuals.append(diffs)
-
-            if z_L_traj.shape[0] > 1:
-                z_L_diffs = np.linalg.norm(np.diff(z_L_traj, axis=0), axis=-1)   # (T-1,)
-            else:
-                z_L_diffs = np.array([0.0])
-            self.z_L_residuals.append(z_L_diffs)
-
-            pos_steps = self._z_H_pos_per_step_batch[b]   # list of (L, D)
-            if len(pos_steps) > 1:
-                pos_traj = np.stack(pos_steps, axis=0)     # (T, L, D)
-                # L2 norm over D，不做 mean-pool
-                pos_diffs = np.linalg.norm(
-                    np.diff(pos_traj, axis=0), axis=-1
-                ) / math.sqrt(pos_traj.shape[-1])          # (T-1, L)
-            else:
-                pos_diffs = np.zeros((1, pos_steps[0].shape[0]))
-            self.pos_residuals.append(pos_diffs)
-            self.given_masks.append(self._given_masks_batch[b])
-
-        self._batch_open = False
-
-    @property
-    def n_samples(self):
-        return len(self.trajectories)
-
-
 def run_z_analysis(
-    collector: ZAnalysisCollector,
-    config: EvalConfig,
+    collector: ZTrace,
+    config: TraceConfig,
     save_dir: str,
     rank: int,
     train_state: TrainState,
@@ -333,7 +208,7 @@ def run_z_analysis(
     print(f"correct_flags count:    {len(collector.correct_flags)}")
     print(f"skipped count:          {n_skipped}")
 
-    # ── save raw data ──────────────────────────────────────────────────────
+    # save raw data
     np.savez_compressed(
         os.path.join(save_dir, "z_raw.npz"),
         correct_flags=np.array(collector.correct_flags),
@@ -341,7 +216,7 @@ def run_z_analysis(
     )
     print(f"[z_analysis] saved z_raw.npz")
 
-    # ── PCA ────────────────────────────────────────────────────────────────
+    # PCA
     max_s = config.z_analysis_max_samples_pca
     trajs = collector.trajectories
     z_L_trajs = collector.z_L_trajectories
@@ -392,7 +267,7 @@ def run_z_analysis(
     proj_linit_single = pca_L.transform(l_init_vec)[:, :2]   # (1, 2)
     proj_inits_L = np.repeat(proj_linit_single, len(sub_z_L_trajs), axis=0)  # (N, 2)
 
-    # ── scalar metrics ─────────────────────────────────────────────────────
+    # scalar metrics
     wandb_log: dict = {}
 
     wandb_log["z_analysis/n_samples"]       = n
@@ -447,7 +322,7 @@ def run_z_analysis(
     )
     wandb_log["z_analysis/pca_explained_variance"] = ev_table
 
-    # ── plots → wandb.Image ────────────────────────────────────────────────
+    # plots → wandb.Image
     wandb_log["z_analysis/z_H_pca_split"] = _save_wandb(_plot_pca_split(proj, sample_ids, sub_flags, pca, save_dir, z_label="z_H"), save_dir, "z_H_trajectory_pca_split.png")
     wandb_log["z_analysis/z_H_pca_combined"] = _save_wandb(_plot_pca_combined(proj, sample_ids, sub_flags, pca, save_dir, z_label="z_H"), save_dir, "z_H_trajectory_pca_combined.png")
     wandb_log["z_analysis/z_H_forward_residual"] = _save_wandb(_plot_forward_residual(collector.residuals, collector.correct_flags, save_dir, z_label="z_H"), save_dir, "z_H_forward_residual.png")
@@ -471,10 +346,13 @@ def run_z_analysis(
         wandb_log["z_analysis/residual_vs_rating"] = _save_wandb(_plot_residual_vs_rating(collector.residuals, collector.ratings, collector.correct_flags, save_dir), save_dir, "residual_vs_rating.png")
         wandb_log["z_analysis/accuracy_vs_rating"] = _save_wandb(_plot_accuracy_vs_rating(collector.correct_flags, collector.ratings, save_dir), save_dir, "accuracy_vs_rating.png")
         wandb_log["z_analysis/residual_colormap_rating"] = _save_wandb(_plot_residual_by_rating_colormap(collector.residuals, collector.ratings, collector.correct_flags, save_dir), save_dir, "residual_colormap_rating.png")
+    if collector.rec_z_H:
+        wandb_log["z_analysis/recursion_residual"] = _save_wandb(_plot_recursion_residual(rec_z_H=collector.rec_z_H, rec_z_L=collector.rec_z_L, rec_correct_flags=collector.rec_correct_flags, H_cycles=collector.H_cycles, L_cycles=collector.L_cycles, save_dir=save_dir), save_dir, "recursion_residual.png")
+    
     # Drop None values (plots that returned None due to insufficient data)
     wandb_log = {k: v for k, v in wandb_log.items() if v is not None}
 
-    # ── log to wandb ───────────────────────────────────────────────────────
+    # log to wandb
     if wandb.run is not None:
         wandb.log(wandb_log, step=wandb_step)
         print(f"[z_analysis] logged {len(wandb_log)} entries to wandb (step={wandb_step})")
@@ -527,196 +405,8 @@ def _save_wandb(fig, save_dir: str, filename: str) -> Optional[wandb.Image]:
     print(f"[z_analysis] saved {filename}")
     return wandb.Image(path)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# EVALUATE  (original function, minimally extended)
-# ─────────────────────────────────────────────────────────────────────────────
 
-def evaluate(
-    config: EvalConfig,
-    train_state: TrainState,
-    eval_loader: DataLoader,
-    eval_metadata: PuzzleDatasetMetadata,
-    evaluators: List[Any],
-    rank: int,
-    world_size: int,
-    cpu_group: Optional[dist.ProcessGroup],
-):
-    reduced_metrics = None
-    progress_bar = None
-    if rank == 0:
-        progress_bar = tqdm.tqdm(total=train_state.total_steps, desc="Evaluating", unit="batch")
-
-    # ── z analysis setup (new) ────────────────────────────────────────────
-    z_collector = None
-    if config.z_analysis and rank == 0:
-        z_collector = ZAnalysisCollector()
-        print("[z_analysis] Enabled")
-    z_batches_collected = 0
-
-    with torch.inference_mode():
-        return_keys = set(config.eval_save_outputs)
-        if z_collector is not None:
-            return_keys.add("preds")
-
-        for evaluator in evaluators:
-            evaluator.begin_eval()
-            return_keys.update(evaluator.required_outputs)
-
-        # Run evaluation
-        set_ids = {k: idx for idx, k in enumerate(eval_metadata.sets)}
-
-        save_preds = {}
-
-        metric_keys = []
-        metric_values = None
-
-        carry = None
-        processed_batches: int = 0
-        
-        for set_name, batch, global_batch_size in eval_loader:
-            processed_batches += 1
-            if rank == 0 and progress_bar is not None:
-                progress_bar.update(processed_batches - progress_bar.n)  # type: ignore
-            
-            # To device
-            batch = {k: v.cuda() for k, v in batch.items()}
-            with torch.device("cuda"):
-                carry = train_state.model.initial_carry(batch)  # type: ignore
-
-            # ── z collector: begin batch (new) ────────────────────────────
-            collect_this_batch = (
-                z_collector is not None
-                and z_batches_collected < config.z_analysis_max_batches
-            )
-            if collect_this_batch:
-                z_collector.begin_batch(batch, config)
-
-            # Forward
-            inference_steps = 0
-            while True:
-                carry, loss, metrics, preds, all_finish = train_state.model(
-                    carry=carry, batch=batch, return_keys=return_keys
-                )
-                inference_steps += 1
-
-                # ── z collector: record step (new) ────────────────────────
-                if collect_this_batch:
-                    z_collector.record_step(carry)
-
-                if all_finish:
-                    break
-
-            # ── z collector: end batch (new) ──────────────────────────────
-            if collect_this_batch:
-                batch_ratings = batch.get("ratings")
-                if batch_ratings is not None:
-                    batch_ratings = batch_ratings.cpu().numpy()
-                with torch.inference_mode():
-                    z_collector.end_batch(carry, carry.current_data["labels"], preds["preds"], ratings=batch_ratings)
-                z_batches_collected += 1
-
-            if rank == 0 and progress_bar is not None:
-                progress_bar.set_description(f"Batch {processed_batches}: {set_name} | Inference steps: {inference_steps}")
-
-            for collection in (batch, preds):
-                for k, v in collection.items():
-                    if k in config.eval_save_outputs:
-                        save_preds.setdefault(k, [])
-                        save_preds[k].append(v.cpu())  # Move to CPU for saving GPU memory
-
-            for evaluator in evaluators:
-                evaluator.update_batch(batch, preds)
-
-            del carry, loss, preds, batch, all_finish
-
-            # Aggregate metrics
-            set_id = set_ids[set_name]
-
-            if metric_values is None:
-                metric_keys = list(
-                    sorted(metrics.keys())
-                )  # Sort keys to guarantee all processes use the same order.
-                metric_values = torch.zeros(
-                    (len(set_ids), len(metrics.values())), dtype=torch.float32, device="cuda"
-                )
-
-            metric_values[set_id] += torch.stack([metrics[k] for k in metric_keys])
-
-            del metrics
-
-        # concatenate save preds
-        save_preds = {k: torch.cat(v, dim=0) for k, v in save_preds.items()}
-
-        # Save preds
-        if config.checkpoint_path is not None and len(save_preds):
-            # Each rank save predictions independently
-            os.makedirs(os.path.dirname(config.checkpoint_path), exist_ok=True)
-            torch.save(
-                save_preds, os.path.join(config.checkpoint_path, f"step_{train_state.step}_all_preds.{rank}")
-            )
-
-        del save_preds
-
-        # Reduce to rank 0
-        if metric_values is not None:
-            if world_size > 1:
-                dist.reduce(metric_values, dst=0)
-
-            if rank == 0:
-                reduced_metrics = metric_values.cpu().numpy()
-                reduced_metrics = {
-                    set_name: {
-                        metric_name: reduced_metrics[set_id, metric_id]
-                        for metric_id, metric_name in enumerate(metric_keys)
-                    }
-                    for set_id, set_name in enumerate(set_ids)
-                }
-
-                # Postprocess
-                for set_name, m in reduced_metrics.items():
-                    count = m.pop("count")
-                    reduced_metrics[set_name] = {k: v / count for k, v in m.items()}
-
-        # Run evaluators
-        if rank == 0:
-            print(f"\nRunning {len(evaluators)} evaluator(s)...")
-            
-        for i, evaluator in enumerate(evaluators):
-            if rank == 0:
-                print(f"Running evaluator {i+1}/{len(evaluators)}: {evaluator.__class__.__name__}")
-                
-            # Path for saving
-            evaluator_save_path = None
-            if config.checkpoint_path is not None:
-                evaluator_save_path = os.path.join(
-                    config.checkpoint_path,
-                    f"evaluator_{evaluator.__class__.__name__}_step_{train_state.step}",
-                )
-                os.makedirs(evaluator_save_path, exist_ok=True)
-
-            # Run and log
-            metrics = evaluator.result(evaluator_save_path, rank=rank, world_size=world_size, group=cpu_group)
-            if rank == 0 and metrics is not None:
-                if reduced_metrics is None:
-                    reduced_metrics = {}
-
-                reduced_metrics.update(metrics)
-                print(f"  Completed {evaluator.__class__.__name__}")
-                
-        if rank == 0:
-            print("All evaluators completed!")
-
-    # ── z analysis: run PCA and save plots (new) ──────────────────────────
-    if z_collector is not None and z_collector.n_samples > 0:
-        z_save_dir = os.path.join(
-            config.checkpoint_path or "checkpoints/z_analysis",
-            f"z_analysis_step_{train_state.step}"
-        )
-        run_z_analysis(z_collector, config, z_save_dir, rank, train_state, wandb_step=train_state.step)
-
-    return reduced_metrics
-
-def save_code_and_config(config: EvalConfig):
+def save_code_and_config(config: TraceConfig):
     if config.checkpoint_path is None or wandb.run is None:
         return
 
@@ -742,14 +432,14 @@ def save_code_and_config(config: EvalConfig):
     wandb.run.log_code(config.checkpoint_path)
 
 
-def load_synced_config(hydra_config: DictConfig, rank: int, world_size: int) -> EvalConfig:
+def load_synced_config(hydra_config: DictConfig, rank: int, world_size: int) -> TraceConfig:
     objects = [None]
     if rank == 0:
-        config = EvalConfig(**hydra_config)  # type: ignore
+        config = TraceConfig(**hydra_config)  # type: ignore
 
         # Naming
         if config.project_name is None:
-            config.project_name = f"{os.path.basename(config.data_paths[0]).capitalize()}-eval-torch"
+            config.project_name = f"{os.path.basename(config.data_paths[0]).capitalize()}-trace-torch"
         if config.run_name is None:
             config.run_name = f"{config.arch.name.split('@')[-1]} {coolname.generate_slug(2)}"
         if config.checkpoint_path is None:
@@ -763,7 +453,7 @@ def load_synced_config(hydra_config: DictConfig, rank: int, world_size: int) -> 
     return objects[0]  # type: ignore
 
 
-@hydra.main(config_path="config", config_name="cfg_eval", version_base=None)
+@hydra.main(config_path="config", config_name="cfg_trace", version_base=None)
 def launch(hydra_config: DictConfig):
     RANK = 0
     WORLD_SIZE = 1
@@ -817,22 +507,172 @@ def launch(hydra_config: DictConfig):
 
     train_state.model.eval()
 
-    # Run evaluation
-    metrics = evaluate(
-        config, 
-        train_state, 
-        eval_loader, 
-        eval_metadata, 
-        evaluators,
-        rank=RANK, 
-        world_size=WORLD_SIZE, 
-        cpu_group=CPU_PROCESS_GROUP
-    )
+    z_trace = None
+    if RANK == 0:
+        z_trace = ZTrace(
+            H_cycles = config.arch.H_cycles,
+            L_cycles = config.arch.L_cycles,
+            halt_max_steps = config.arch.halt_max_steps,
+            rec_max_correct = 50,
+            rec_max_incorrect = 50,
+        )
+        print(f"[z_analysis] Enabled\n"
+              f"H_cycles={config.arch.H_cycles}\n"
+              f"L_cycles={config.arch.L_cycles}\n"
+              f"halt_max_steps={config.arch.halt_max_steps}\n"
+              f"snapshots_per_step={z_trace.snapshots_per_step}")
 
-    if RANK == 0 and metrics is not None:
-        wandb.log(metrics, step=train_state.step)
 
-    # finalize
+    reduced_metrics = None
+    progress_bar = None
+    if RANK == 0:
+        total_steps = math.ceil(eval_metadata.total_puzzles * eval_metadata.mean_puzzle_examples / config.global_batch_size)
+        progress_bar = tqdm.tqdm(total=total_steps, desc="Evaluating", unit="batch")
+
+    return_keys = set(config.eval_save_outputs)
+    if z_trace is not None:
+        return_keys.add("preds")
+    for evaluator in evaluators:
+        evaluator.begin_eval()
+        return_keys.update(evaluator.required_outputs)
+
+    set_ids = {k: idx for idx, k in enumerate(eval_metadata.sets)}
+    save_preds: dict = {}
+    metric_keys: list = []
+    metric_values = None
+    processed_batches = 0
+    z_samples_collected = 0
+
+    # main eval loop
+    with torch.inference_mode():
+        for set_name, batch, global_batch_size in eval_loader:
+
+            # stop if z samples collected is enough
+            if z_samples_collected >= config.z_analysis_max_samples:
+                break
+
+            processed_batches += 1
+            if RANK == 0 and progress_bar is not None:
+                progress_bar.update(processed_batches - progress_bar.n)
+
+            batch = {k: v.cuda() for k, v in batch.items()}
+            with torch.device("cuda"):
+                carry = train_state.model.initial_carry(batch)
+
+            if z_trace is not None:
+                z_trace.clear_batch_buffers()
+
+            inference_steps = 0
+            while True:
+                carry, loss, metrics, preds, all_finish = train_state.model(
+                    carry=carry,
+                    batch=batch,
+                    return_keys=return_keys,
+                    trace=z_trace if z_trace is not None and z_samples_collected < config.z_analysis_max_samples else None,
+                )
+                inference_steps += 1
+                if all_finish:
+                    break
+
+            halt_steps_np = carry.steps.cpu().numpy()
+            labels_np     = carry.current_data["labels"].cpu().numpy()
+            batch_ratings = batch.get("ratings")
+            if batch_ratings is not None:
+                batch_ratings = batch_ratings.cpu().numpy()
+
+            if z_trace is not None:
+                z_trace.process_batch(
+                    batch_inputs_np = batch["inputs"].cpu().numpy(),
+                    preds_np        = preds["preds"].cpu().numpy(),
+                    labels_np       = labels_np,
+                    ratings_np      = batch_ratings,
+                    halt_steps_np   = halt_steps_np,
+                )
+                z_samples_collected += global_batch_size
+
+            if RANK == 0 and progress_bar is not None:
+                progress_bar.set_description(
+                    f"Batch {processed_batches}: {set_name} | Inference steps: {inference_steps}"
+                )
+
+            for collection in (batch, preds):
+                for k, v in collection.items():
+                    if k in config.eval_save_outputs:
+                        save_preds.setdefault(k, [])
+                        save_preds[k].append(v.cpu())
+
+            for evaluator in evaluators:
+                evaluator.update_batch(batch, preds)
+
+            del carry, loss, preds, batch, all_finish
+
+            # metrics aggregation
+            set_id = set_ids[set_name]
+            if metric_values is None:
+                metric_keys = list(sorted(metrics.keys()))
+                metric_values = torch.zeros((len(set_ids), len(metric_keys)), dtype=torch.float32, device="cuda")
+            metric_values[set_id] += torch.stack([metrics[k] for k in metric_keys])
+            del metrics
+
+        # post-loop: save preds
+        save_preds = {k: torch.cat(v, dim=0) for k, v in save_preds.items()}
+        if config.checkpoint_path is not None and len(save_preds):
+            os.makedirs(os.path.dirname(config.checkpoint_path), exist_ok=True)
+            torch.save(save_preds, os.path.join(config.checkpoint_path, f"step_{train_state.step}_all_preds.{RANK}"))
+        del save_preds
+
+        # reduce metrics
+        if metric_values is not None:
+            if WORLD_SIZE > 1:
+                dist.reduce(metric_values, dst=0)
+            if RANK == 0:
+                reduced_metrics_np = metric_values.cpu().numpy()
+                reduced_metrics = {
+                    set_name: {
+                        metric_name: reduced_metrics_np[set_id, metric_id]
+                        for metric_id, metric_name in enumerate(metric_keys)
+                    }
+                    for set_id, set_name in enumerate(set_ids)
+                }
+                for set_name, m in reduced_metrics.items():
+                    count = m.pop("count")
+                    reduced_metrics[set_name] = {
+                        k: v / count for k, v in m.items()
+                    }
+
+        # evaluators
+        if RANK == 0:
+            print(f"\nRunning {len(evaluators)} evaluator(s)...")
+        for i, evaluator in enumerate(evaluators):
+            if RANK == 0:
+                print(f"Running evaluator {i+1}/{len(evaluators)}: {evaluator.__class__.__name__}")
+            evaluator_save_path = None
+            if config.checkpoint_path is not None:
+                evaluator_save_path = os.path.join(config.checkpoint_path, f"evaluator_{evaluator.__class__.__name__}_step_{train_state.step}")
+                os.makedirs(evaluator_save_path, exist_ok=True)
+            metrics = evaluator.result(
+                evaluator_save_path,
+                rank=RANK,
+                world_size=WORLD_SIZE,
+                group=CPU_PROCESS_GROUP
+            )
+            if RANK == 0 and metrics is not None:
+                if reduced_metrics is None:
+                    reduced_metrics = {}
+                reduced_metrics.update(metrics)
+                print(f"  Completed {evaluator.__class__.__name__}")
+        if RANK == 0:
+            print("All evaluators completed!")
+
+    # run z analysis
+    if z_trace is not None and z_trace.n_samples > 0:
+        z_trace.verify_alignment()
+        z_save_dir = os.path.join(config.checkpoint_path or "checkpoints/z_analysis", f"z_analysis_step_{train_state.step}")
+        run_z_analysis(z_trace, config, z_save_dir, RANK, train_state, wandb_step=train_state.step)
+
+    if RANK == 0 and reduced_metrics is not None:
+        wandb.log(reduced_metrics, step=train_state.step)
+
     if dist.is_initialized():
         dist.destroy_process_group()
     wandb.finish()

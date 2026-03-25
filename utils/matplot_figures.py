@@ -1,5 +1,5 @@
 from typing import List
-
+import math
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.lines import Line2D
@@ -560,4 +560,136 @@ def _plot_residual_by_rating_colormap(residuals, ratings, flags, save_dir, z_lab
     fig.colorbar(sm, ax=axes, label="log(1 + Puzzle Rating)", fraction=0.02, pad=0.04)
     
     plt.suptitle(f"{z_label} Forward Residual colored by Puzzle Rating", fontsize=12)
+    return fig
+
+
+def _plot_recursion_residual(
+    rec_z_H: List[np.ndarray],
+    rec_z_L: List[np.ndarray],
+    rec_correct_flags: List[bool],
+    H_cycles: int,
+    L_cycles: int,
+    save_dir: str,
+):
+    """
+    Plot z_H and z_L residuals at recursion level.
+    z_H: H_cycles updates per supervision step (3 per step)
+    z_L: H_cycles * L_cycles updates per supervision step (18 per step)
+    x-axis: shared global forward index (0 to T * S_total - 1)
+    """
+    if not rec_z_H:
+        return None
+
+    T       = rec_z_H[0].shape[0]
+    S_H     = H_cycles                  # 3
+    S_L     = H_cycles * L_cycles       # 18
+    S_total = H_cycles * (L_cycles + 1) # 21
+
+    # ── residual 計算 ──────────────────────────────────────────────────────
+    def _residual(arr):
+        # arr: (T, S, L, D)
+        T_, S_, L_, D_ = arr.shape
+        flat  = arr.reshape(T_ * S_, L_, D_).mean(axis=1)  # (T*S, D)
+        diffs = np.linalg.norm(
+            np.diff(flat, axis=0), axis=-1) / math.sqrt(D_)
+        return diffs  # (T*S - 1,)
+
+    correct_idxs   = [i for i, f in enumerate(rec_correct_flags) if f]
+    incorrect_idxs = [i for i, f in enumerate(rec_correct_flags) if not f]
+
+    resid_H_c = [_residual(rec_z_H[i]) for i in correct_idxs]
+    resid_H_i = [_residual(rec_z_H[i]) for i in incorrect_idxs]
+    resid_L_c = [_residual(rec_z_L[i]) for i in correct_idxs]
+    resid_L_i = [_residual(rec_z_L[i]) for i in incorrect_idxs]
+
+    if not resid_H_c and not resid_H_i:
+        return None
+
+    # ── x 座標：對應全局 forward index ────────────────────────────────────
+    # z_H snapshot positions: end of each H_cycle
+    x_H_snapshots = np.array([
+        t * S_total + (h + 1) * (L_cycles + 1) - 1
+        for t in range(T)
+        for h in range(H_cycles)
+    ])  # (T*H_cycles,) = (48,)
+
+    # z_L snapshot positions: each L_step within each H_cycle
+    x_L_snapshots = np.array([
+        t * S_total + h * (L_cycles + 1) + l
+        for t in range(T)
+        for h in range(H_cycles)
+        for l in range(L_cycles)
+    ])  # (T*H_cycles*L_cycles,) = (288,)
+
+    # residual x: use the position of the later snapshot
+    x_H = x_H_snapshots[1:].astype(float)  # (T*H_cycles - 1,) = (47,)
+    x_L = x_L_snapshots[1:].astype(float)  # (T*H_cycles*L_cycles - 1,) = (287,)
+
+    # boundary markers
+    step_boundaries  = [t * S_total for t in range(1, T)]
+    h_update_pos     = x_H_snapshots.tolist()
+
+    # ── figure ─────────────────────────────────────────────────────────────
+    fig, axes = plt.subplots(2, 1, figsize=(18, 8), constrained_layout=True)
+
+    COLOR_CORRECT   = "steelblue"
+    COLOR_INCORRECT = "firebrick"
+    ALPHA_IND       = 0.35   # individual curve alpha（原本 0.12，提高到 0.35）
+    LW_IND          = 0.8
+
+    for ax, label, x, resid_c, resid_i in [
+        (axes[0], "z_H", x_H, resid_H_c, resid_H_i),
+        (axes[1], "z_L", x_L, resid_L_c, resid_L_i),
+    ]:
+        for idx, resid in enumerate(resid_c):
+            ax.plot(x, resid,
+                    color=COLOR_CORRECT, alpha=ALPHA_IND, lw=LW_IND,
+                    label="Correct" if idx == 0 else None)
+
+        for idx, resid in enumerate(resid_i):
+            ax.plot(x, resid,
+                    color=COLOR_INCORRECT, alpha=ALPHA_IND, lw=LW_IND,
+                    label="Incorrect" if idx == 0 else None)
+
+        # boundary lines
+        for idx, xb in enumerate(step_boundaries):
+            ax.axvline(xb, color="gray", lw=0.8, ls="--", alpha=0.6,
+                       label="Supervision step boundary" if idx == 0 else None)
+
+        for idx, xh in enumerate(h_update_pos):
+            ax.axvline(xh, color="orange", lw=0.5, ls=":", alpha=0.5,
+                       label="z_H update (H_cycle end)" if idx == 0 else None)
+
+        # axes
+        ax.set_xlim(-1, T * S_total)
+        ax.set_ylabel(f"||{label}[t] - {label}[t-1]|| / √D", fontsize=10)
+        ax.set_xlabel("Global Forward Index", fontsize=10)
+
+        n_c = len(resid_c)
+        n_i = len(resid_i)
+        updates_per_step = S_H if label == "z_H" else S_L
+        ax.set_title(
+            f"{label} Residual — Recursion Level  "
+            f"({updates_per_step} updates/step, "
+            f"correct n={n_c}, incorrect n={n_i})",
+            fontsize=11
+        )
+
+        # x tick: supervision step tag
+        tick_positions = [t * S_total + S_total // 2 for t in range(T)]
+        ax.set_xticks(tick_positions)
+        ax.set_xticklabels([f"S{t+1}" for t in range(T)], fontsize=8)
+
+        ax.legend(fontsize=9, loc="upper right")
+        ax.grid(True, lw=0.3, alpha=0.4)
+
+    plt.suptitle(
+        f"Recursion-Level Residual  "
+        f"(H_cycles={H_cycles}, L_cycles={L_cycles}, "
+        f"S_total={S_total} forwards/step)\n"
+        f"z_H: {T * H_cycles} updates total  |  "
+        f"z_L: {T * H_cycles * L_cycles} updates total  |  "
+        f"x-axis = global forward index (shared)",
+        fontsize=11
+    )
     return fig

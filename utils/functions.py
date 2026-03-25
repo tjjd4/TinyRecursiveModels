@@ -50,6 +50,16 @@ def load_checkpoint_from_path(model: nn.Module, load_path: str):
             raise FileNotFoundError(f"Checkpoint not found: {load_path}")
         state_dict = torch.load(load_path, map_location=device)
 
+    # Reconcile _orig_mod. prefix mismatch between compiled/uncompiled checkpoints
+    ckpt_has_prefix = any(k.startswith("_orig_mod.") for k in state_dict)
+    model_has_prefix = any(k.startswith("_orig_mod.") for k in model.state_dict())
+    if ckpt_has_prefix and not model_has_prefix:
+        print("[load_checkpoint] stripping '_orig_mod.' prefix from checkpoint keys")
+        state_dict = {(k[len("_orig_mod."):] if k.startswith("_orig_mod.") else k): v for k, v in state_dict.items()}
+    elif not ckpt_has_prefix and model_has_prefix:
+        print("[load_checkpoint] adding '_orig_mod.' prefix to checkpoint keys")
+        state_dict = {"_orig_mod." + k: v for k, v in state_dict.items()}
+
     # Resize and reset puzzle emb if needed
     puzzle_emb_name = "_orig_mod.model.inner.puzzle_emb.weights"
     if hasattr(model, "model") and hasattr(model.model, "puzzle_emb"):

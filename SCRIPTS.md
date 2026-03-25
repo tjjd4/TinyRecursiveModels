@@ -13,7 +13,7 @@ evaluators="[]" \
 arch.mlp_t=True arch.pos_encodings=none \
 arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=6 \
-load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_44/step_65104" \
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_44/step_65100" \
 +run_name=${run_name}
 ```
 
@@ -27,7 +27,7 @@ data_paths="[data/maze-30x30-hard-1k]" \
 evaluators="[]" \
 arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=4 \
-load_checkpoint="checkpoints/Maze-30x30-hard-1k-ACT-torch/pretrain_att_maze30x30_1gpu_44/step_65104" \
+load_checkpoint="checkpoints/Maze-30x30-hard-1k-ACT-torch/pretrain_att_maze30x30_1gpu_44/step_65100" \
 +run_name=${run_name}
 ```
 
@@ -36,15 +36,15 @@ load_checkpoint="checkpoints/Maze-30x30-hard-1k-ACT-torch/pretrain_att_maze30x30
 ### Sudoku-Extreme:
 
 ```bash
-run_name="eval_pretrain_mlp_t_sudoku_z_analysis"
+run_name="z_analysis_pretrain_mlp_t_sudoku"
 python z_analysis.py \
-arch=trm \
+arch=trm_trace \
 data_paths="[data/sudoku-extreme-1k-aug-1000]" \
 evaluators="[]" \
 arch.mlp_t=True arch.pos_encodings=none \
 arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=6 \
-load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_78/step_65104" \
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_44/step_65100" \
 +run_name=${run_name}
 ```
 
