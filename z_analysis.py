@@ -25,7 +25,7 @@ from omegaconf import DictConfig
 
 from puzzle_dataset_with_rating import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
 from utils.functions import load_model_class, get_model_source_path, load_checkpoint_from_path
-from utils.matplot_figures import _plot_pca_split, _plot_pca_combined, _plot_forward_residual, _plot_pca_variance, _plot_displacement_hist, _plot_step1_vs_final, _plot_hinit_vs_final, _plot_pos_residual_heatmap_given, _plot_pos_residual_heatmap_empty, _plot_pos_residual_by_step, _plot_rating_distribution, _plot_residual_vs_rating, _plot_accuracy_vs_rating, _plot_residual_by_rating_colormap, _plot_recursion_residual
+from utils.matplot_figures import _plot_pca_split, _plot_pca_combined, _plot_forward_residual, _plot_pca_variance, _plot_displacement_hist, _plot_init_to_final_split, _plot_pos_residual_heatmap_given, _plot_pos_residual_heatmap_empty, _plot_pos_residual_by_step, _plot_rating_distribution, _plot_residual_vs_rating, _plot_accuracy_vs_rating, _plot_residual_by_rating_colormap, _plot_recursion_residual
 
 from models.losses.loss_fn import IGNORE_LABEL_ID
 from models.recursive_reasoning.trm_trace import ZTrace
@@ -159,6 +159,24 @@ def init_train_state(config: TraceConfig, metadata: PuzzleDatasetMetadata, rank:
     # Model
     model = load_model_from_checkpoint(config, metadata, rank, world_size)
 
+    # # Zero out H_init
+    # zero_H_init = torch.zeros_like(model.model.inner.H_init)
+    # model.model.inner.H_init = zero_H_init.type_as(model.model.inner.H_init)
+    # zero_L_init = torch.zeros_like(model.model.inner.L_init)
+    # model.model.inner.L_init = zero_L_init.type_as(model.model.inner.L_init)
+    # print("Zeroed out H_init and L_init")
+    # print(model.model.inner.H_init)
+    # print(model.model.inner.L_init)
+
+    # data = np.load("checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_44/z_analysis_step_0/z_raw.npz", allow_pickle=True)
+    # trajs  = list(data["trajectories"])   # list of (T, D) — T steps, D hidden
+    # flags  = list(data["correct_flags"])  # bool
+    # correct_finals = np.stack([
+    #     t[-1] for t, f in zip(trajs, flags) if f
+    # ])  # (N_correct, D)
+    # centroid = correct_finals.mean(axis=0)
+    # model.model.inner.H_init = centroid.type_as(model.model.inner.H_init)
+
     return TrainState(
         step=0,
         total_steps=total_steps,
@@ -200,7 +218,7 @@ def run_z_analysis(
     n = collector.n_samples
     n_skipped = collector.n_skipped
     n_correct = sum(collector.correct_flags)
-    puzzle_emb_len = config.arch.puzzle_emb_len if hasattr(config.arch, "puzzle_emb_len") else (train_state.model.model.inner.puzzle_emb_len if hasattr(train_state.model.model.inner, "puzzle_emb_len") else 1)
+    puzzle_emb_len = collector.puzzle_emb_len
     print(f"\n[z_analysis] {n} puzzles  |  accuracy = {n_correct}/{n} = {n_correct/n:.2%}")
     print(f"ratings count:          {len(collector.ratings)}")
     print(f"trajectories count:     {len(collector.trajectories)}")
@@ -234,33 +252,33 @@ def run_z_analysis(
         [np.full(t.shape[0], si, dtype=int) for si, t in enumerate(sub_trajs)]
     )
 
-    all_z_H_full = np.concatenate(trajs, axis=0)
-    all_z_L_full = np.concatenate(z_L_trajs, axis=0)
+    all_z_H_trajs_full = np.concatenate(trajs, axis=0)
+    all_z_L_trajs_full = np.concatenate(z_L_trajs, axis=0)
 
-    all_z_H_sub = np.concatenate(sub_trajs, axis=0)
-    all_z_L_sub = np.concatenate(sub_z_L_trajs, axis=0)
+    all_z_H_trajs_sub = np.concatenate(sub_trajs, axis=0)
+    all_z_L_trajs_sub = np.concatenate(sub_z_L_trajs, axis=0)
 
-    cov_z_H = np.cov(all_z_H_full, rowvar=False)
+    cov_z_H = np.cov(all_z_H_trajs_full, rowvar=False)
     pr_z_H = float((np.trace(cov_z_H)**2) / np.trace(cov_z_H.dot(cov_z_H)))
     del cov_z_H
-    cov_z_L = np.cov(all_z_L_full, rowvar=False)
+    cov_z_L = np.cov(all_z_L_trajs_full, rowvar=False)
     pr_z_L = float((np.trace(cov_z_L)**2) / np.trace(cov_z_L.dot(cov_z_L)))
     del cov_z_L
 
-    n_comp = min(config.z_analysis_pca_components, all_z_H_full.shape[1], all_z_H_full.shape[0])
+    n_comp = min(config.z_analysis_pca_components, all_z_H_trajs_full.shape[1], all_z_H_trajs_full.shape[0])
     pca = PCA(n_components=n_comp, random_state=0)
-    pca.fit(all_z_H_full)
-    proj = pca.transform(all_z_H_sub)
+    pca.fit(all_z_H_trajs_full)
+    proj = pca.transform(all_z_H_trajs_sub)
 
     h_init = train_state.model.model.inner.H_init
     h_init_vec = h_init.float().cpu().numpy().reshape(1, -1)
     proj_hinit_single = pca.transform(h_init_vec)[:, :2]   # (1, 2)
     proj_inits = np.repeat(proj_hinit_single, len(sub_trajs), axis=0)  # (N, 2)
 
-    n_comp_L = min(config.z_analysis_pca_components, all_z_L_full.shape[1], all_z_L_full.shape[0])
+    n_comp_L = min(config.z_analysis_pca_components, all_z_L_trajs_full.shape[1], all_z_L_trajs_full.shape[0])
     pca_L = PCA(n_components=n_comp_L, random_state=0)
-    pca_L.fit(all_z_L_full)
-    proj_z_L = pca_L.transform(all_z_L_sub)
+    pca_L.fit(all_z_L_trajs_full)
+    proj_z_L = pca_L.transform(all_z_L_trajs_sub)
 
     l_init = train_state.model.model.inner.L_init
     l_init_vec = l_init.float().cpu().numpy().reshape(1, -1)
@@ -324,30 +342,28 @@ def run_z_analysis(
 
     # plots → wandb.Image
     wandb_log["z_analysis/z_H_pca_split"] = _save_wandb(_plot_pca_split(proj, sample_ids, sub_flags, pca, save_dir, z_label="z_H"), save_dir, "z_H_trajectory_pca_split.png")
-    wandb_log["z_analysis/z_H_pca_combined"] = _save_wandb(_plot_pca_combined(proj, sample_ids, sub_flags, pca, save_dir, z_label="z_H"), save_dir, "z_H_trajectory_pca_combined.png")
+    wandb_log["z_analysis/z_H_pca_combined"] = _save_wandb(_plot_pca_combined(proj, sample_ids, sub_flags, pca, proj_inits, save_dir, z_label="z_H"), save_dir, "z_H_trajectory_pca_combined.png")
     wandb_log["z_analysis/z_H_forward_residual"] = _save_wandb(_plot_forward_residual(collector.residuals, collector.correct_flags, save_dir, z_label="z_H"), save_dir, "z_H_forward_residual.png")
     wandb_log["z_analysis/z_H_pca_variance"] = _save_wandb(_plot_pca_variance(pca, save_dir, z_label="z_H"), save_dir, "z_H_pca_variance.png")
     wandb_log["z_analysis/z_H_displacement_hist"] = _save_wandb(_plot_displacement_hist(collector.trajectories, collector.correct_flags, save_dir, z_label="z_H"), save_dir, "z_H_displacement_histogram.png")
-    wandb_log["z_analysis/z_H_pca_step1_final"] = _save_wandb(_plot_step1_vs_final(proj, sample_ids, sub_flags, save_dir, z_label="z_H"), save_dir, "z_H_pca_step1_vs_final.png")
-    wandb_log["z_analysis/z_H_pca_hinit_final"] = _save_wandb(_plot_hinit_vs_final(proj_inits, proj, sample_ids, sub_flags, save_dir, z_label="z_H"), save_dir, "z_H_pca_hinit_vs_final.png")
-    wandb_log["z_analysis/z_H_pos_residual_heatmap_given"] = _save_wandb(_plot_pos_residual_heatmap_given(collector.pos_residuals, collector.given_masks, collector.correct_flags, puzzle_emb_len=puzzle_emb_len), save_dir, "z_H_pos_residual_heatmap_given.png")
-    wandb_log["z_analysis/z_H_pos_residual_heatmap_empty"] = _save_wandb(_plot_pos_residual_heatmap_empty(collector.pos_residuals, collector.given_masks, collector.correct_flags, puzzle_emb_len=puzzle_emb_len), save_dir, "z_H_pos_residual_heatmap_empty.png")
-    wandb_log["z_analysis/z_H_pos_residual_by_step"] = _save_wandb(_plot_pos_residual_by_step(collector.pos_residuals, collector.given_masks, collector.correct_flags, puzzle_emb_len=puzzle_emb_len), save_dir, "z_H_pos_residual_by_step.png")
+    wandb_log["z_analysis/z_H_pca_init_to_final"] = _save_wandb(_plot_init_to_final_split(proj_inits, proj, sample_ids, sub_flags, pca, save_dir, z_label="z_H"), save_dir, "z_H_pca_init_to_final.png")
+    # wandb_log["z_analysis/z_H_pos_residual_heatmap_given"] = _save_wandb(_plot_pos_residual_heatmap_given(collector.pos_residuals, collector.given_masks, collector.correct_flags, puzzle_emb_len=puzzle_emb_len), save_dir, "z_H_pos_residual_heatmap_given.png")
+    # wandb_log["z_analysis/z_H_pos_residual_heatmap_empty"] = _save_wandb(_plot_pos_residual_heatmap_empty(collector.pos_residuals, collector.given_masks, collector.correct_flags, puzzle_emb_len=puzzle_emb_len), save_dir, "z_H_pos_residual_heatmap_empty.png")
+    # wandb_log["z_analysis/z_H_pos_residual_by_step"] = _save_wandb(_plot_pos_residual_by_step(collector.pos_residuals, collector.given_masks, collector.correct_flags, puzzle_emb_len=puzzle_emb_len), save_dir, "z_H_pos_residual_by_step.png")
     
     wandb_log["z_analysis/z_L_pca_split"] = _save_wandb(_plot_pca_split(proj_z_L, sample_ids, sub_flags, pca_L, save_dir, z_label="z_L"), save_dir, "z_L_trajectory_pca_split.png")
-    wandb_log["z_analysis/z_L_pca_combined"] = _save_wandb(_plot_pca_combined(proj_z_L, sample_ids, sub_flags, pca_L, save_dir, z_label="z_L"), save_dir, "z_L_trajectory_pca_combined.png")
+    wandb_log["z_analysis/z_L_pca_combined"] = _save_wandb(_plot_pca_combined(proj_z_L, sample_ids, sub_flags, pca_L, proj_inits_L, save_dir, z_label="z_L"), save_dir, "z_L_trajectory_pca_combined.png")
     wandb_log["z_analysis/z_L_forward_residual"] = _save_wandb(_plot_forward_residual(collector.z_L_residuals, collector.correct_flags, save_dir, z_label="z_L"), save_dir, "z_L_forward_residual.png")
     wandb_log["z_analysis/z_L_pca_variance"] = _save_wandb(_plot_pca_variance(pca_L, save_dir, z_label="z_L"), save_dir, "z_L_pca_variance.png")
     wandb_log["z_analysis/z_L_displacement_hist"] = _save_wandb(_plot_displacement_hist(collector.z_L_trajectories, collector.correct_flags, save_dir, z_label="z_L"), save_dir, "z_L_displacement_histogram.png")
-    wandb_log["z_analysis/z_L_pca_step1_final"] = _save_wandb(_plot_step1_vs_final(proj_z_L, sample_ids, sub_flags, save_dir, z_label="z_L"), save_dir, "z_L_pca_step1_vs_final.png")
-    wandb_log["z_analysis/z_L_pca_hinit_final"] = _save_wandb(_plot_hinit_vs_final(proj_inits_L, proj_z_L, sample_ids, sub_flags, save_dir, z_label="z_L"), save_dir, "z_L_pca_hinit_vs_final.png")
+    wandb_log["z_analysis/z_L_pca_init_to_final"] = _save_wandb(_plot_init_to_final_split(proj_inits_L, proj_z_L, sample_ids, sub_flags, pca_L, save_dir, z_label="z_L"), save_dir, "z_L_pca_init_to_final.png")
     if collector.ratings:
         wandb_log["z_analysis/rating_distribution"] = _save_wandb(_plot_rating_distribution(collector.ratings, collector.correct_flags, save_dir), save_dir, "rating_distribution.png")
         wandb_log["z_analysis/residual_vs_rating"] = _save_wandb(_plot_residual_vs_rating(collector.residuals, collector.ratings, collector.correct_flags, save_dir), save_dir, "residual_vs_rating.png")
         wandb_log["z_analysis/accuracy_vs_rating"] = _save_wandb(_plot_accuracy_vs_rating(collector.correct_flags, collector.ratings, save_dir), save_dir, "accuracy_vs_rating.png")
         wandb_log["z_analysis/residual_colormap_rating"] = _save_wandb(_plot_residual_by_rating_colormap(collector.residuals, collector.ratings, collector.correct_flags, save_dir), save_dir, "residual_colormap_rating.png")
     if collector.rec_z_H:
-        wandb_log["z_analysis/recursion_residual"] = _save_wandb(_plot_recursion_residual(rec_z_H=collector.rec_z_H, rec_z_L=collector.rec_z_L, rec_correct_flags=collector.rec_correct_flags, H_cycles=collector.H_cycles, L_cycles=collector.L_cycles, save_dir=save_dir), save_dir, "recursion_residual.png")
+        wandb_log["z_analysis/recursion_residual"] = _save_wandb(_plot_recursion_residual(rec_z_H=collector.rec_z_H, rec_z_L=collector.rec_z_L, rec_correct_flags=collector.rec_correct_flags, H_cycles=collector.H_cycles, L_cycles=collector.L_cycles, H_init=h_init_vec, L_init=l_init_vec, save_dir=save_dir), save_dir, "recursion_residual.png")
     
     # Drop None values (plots that returned None due to insufficient data)
     wandb_log = {k: v for k, v in wandb_log.items() if v is not None}
@@ -512,6 +528,7 @@ def launch(hydra_config: DictConfig):
         z_trace = ZTrace(
             H_cycles = config.arch.H_cycles,
             L_cycles = config.arch.L_cycles,
+            puzzle_emb_len = config.arch.puzzle_emb_len,
             halt_max_steps = config.arch.halt_max_steps,
             rec_max_correct = 50,
             rec_max_incorrect = 50,
@@ -519,6 +536,7 @@ def launch(hydra_config: DictConfig):
         print(f"[z_analysis] Enabled\n"
               f"H_cycles={config.arch.H_cycles}\n"
               f"L_cycles={config.arch.L_cycles}\n"
+              f"puzzle_emb_len={config.arch.puzzle_emb_len}\n"
               f"halt_max_steps={config.arch.halt_max_steps}\n"
               f"snapshots_per_step={z_trace.snapshots_per_step}")
 

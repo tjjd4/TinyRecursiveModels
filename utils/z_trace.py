@@ -11,6 +11,7 @@ import torch._dynamo
 class ZTrace:
     H_cycles: int
     L_cycles: int
+    puzzle_emb_len: int
     halt_max_steps: int
     rec_max_correct: int
     rec_max_incorrect: int
@@ -39,9 +40,10 @@ class ZTrace:
     n_skipped: int = 0
     is_all_trace_collected: bool = False
 
-    def __init__(self, H_cycles: int, L_cycles: int, halt_max_steps: int, rec_max_correct: int, rec_max_incorrect: int):
+    def __init__(self, H_cycles: int, L_cycles: int, puzzle_emb_len: int, halt_max_steps: int, rec_max_correct: int, rec_max_incorrect: int):
         self.H_cycles = H_cycles
         self.L_cycles = L_cycles
+        self.puzzle_emb_len = puzzle_emb_len
         self.halt_max_steps = halt_max_steps
         self.rec_max_correct = rec_max_correct
         self.rec_max_incorrect = rec_max_incorrect
@@ -174,9 +176,15 @@ class ZTrace:
             D = z_H_last.shape[-1]
             L = z_H_last.shape[-2]
 
+            cell_start = self.puzzle_emb_len  # e.g. 2
+            cell_end = self.puzzle_emb_len + 81
+
+            z_H_cell = z_H_last[:, cell_start:cell_end, :]   # (T_actual, 81, D)
+            z_L_cell = z_L_last[:, cell_start:cell_end, :]   # (T_actual, 81, D)
+
             # mean-pool over sequence positions → (T_actual, D)
-            z_H_traj = z_H_last.mean(axis=1)
-            z_L_traj = z_L_last.mean(axis=1)
+            z_H_traj = z_H_cell.mean(axis=1)
+            z_L_traj = z_L_cell.mean(axis=1)
 
             # given mask from first 81 cell tokens
             given = batch_inputs_np[b, :81] != 1  # (81,)
@@ -185,7 +193,7 @@ class ZTrace:
             if T_actual > 1:
                 diffs = np.linalg.norm(np.diff(z_H_traj, axis=0), axis=-1)       # (T-1,)
                 z_L_diffs = np.linalg.norm(np.diff(z_L_traj, axis=0), axis=-1)       # (T-1,)
-                pos_diffs = (np.linalg.norm(np.diff(z_H_last, axis=0), axis=-1) / math.sqrt(D)) # (T-1, L)
+                pos_diffs = (np.linalg.norm(np.diff(z_H_cell, axis=0), axis=-1) / math.sqrt(D)) # (T-1, L)
             else:
                 diffs = np.array([0.0])
                 z_L_diffs = np.array([0.0])
@@ -209,8 +217,8 @@ class ZTrace:
             if not self.is_all_trace_collected and rec_z_H_np is not None:
                 # rec_z_H_np shape: (n_steps * H_cycles, B, L, D)
                 # rec_z_L_np shape: (n_steps * L_cycles * H_cycles, B, L, D)
-                rec_H = np.stack([rec_z_H_np[t * self.H_cycles : t * self.H_cycles + self.H_cycles, b] for t in range(T_actual)])  # (T_actual, H_cycles, L, D)
-                rec_L = np.stack([rec_z_L_np[t * self.L_cycles * self.H_cycles : t * self.L_cycles * self.H_cycles + self.L_cycles * self.H_cycles, b] for t in range(T_actual)])  # (T_actual, L_cycles * H_cycles, L, D)
+                rec_H = np.stack([rec_z_H_np[t * self.H_cycles : t * self.H_cycles + self.H_cycles, b, cell_start:cell_end, :] for t in range(T_actual)])  # (T_actual, H_cycles, L, D)
+                rec_L = np.stack([rec_z_L_np[t * self.L_cycles * self.H_cycles : t * self.L_cycles * self.H_cycles + self.L_cycles * self.H_cycles, b, cell_start:cell_end, :] for t in range(T_actual)])  # (T_actual, L_cycles * H_cycles, L, D)
 
                 self.rec_z_H.append(rec_H)
                 self.rec_z_L.append(rec_L)

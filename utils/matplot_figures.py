@@ -1,7 +1,8 @@
-from typing import List
+from typing import List, Optional
 import math
 import matplotlib.pyplot as plt
 import numpy as np
+import matplotlib.patches as mpatches
 from matplotlib.lines import Line2D
 
 # individual plot functions (each returns fig for wandb logging)
@@ -34,7 +35,7 @@ def _plot_pca_split(proj, sample_ids, flags, pca, save_dir, n_show=60, z_label="
     return fig
 
 
-def _plot_pca_combined(proj, sample_ids, flags, pca, save_dir, n_show=80, z_label="z_H"):
+def _plot_pca_combined(proj, sample_ids, flags, pca, proj_inits, save_dir, n_show=80, z_label="z_H"):
     fig, ax = plt.subplots(figsize=(8, 7))
     for li, is_correct in enumerate(flags[:n_show]):
         color = "steelblue" if is_correct else "firebrick"
@@ -172,7 +173,81 @@ def _plot_step1_vs_final(proj, sample_ids, flags, save_dir, z_label="z_H"):
         ax.set_xlabel("PC1"); ax.set_ylabel("PC2")
         ax.legend(fontsize=9)
         ax.grid(True, lw=0.3, alpha=0.5)
-    plt.suptitle(f"{z_label} PCA: Step-0 vs Final step", fontsize=11)
+    plt.suptitle(f"{z_label} PCA: Step-1 vs Final step", fontsize=11)
+    plt.tight_layout()
+    return fig
+
+
+def _plot_init_to_final_split(proj_inits, proj, sample_ids, flags, pca, save_dir, n_show=60, z_label="z_H"):
+    """
+    proj_inits  : (n_samples, 2)  — H_init projected position
+    proj        : (N_total_steps, 2)
+    sample_ids  : (N_total_steps,)  local index per step
+    flags       : list[bool], length = n_samples
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    correct_local   = [i for i, f in enumerate(flags) if f]
+    incorrect_local = [i for i, f in enumerate(flags) if not f]
+
+    cmap_correct   = plt.get_cmap("viridis_r")
+    cmap_incorrect = plt.get_cmap("plasma_r")
+
+    for ax, local_idxs, cmap, title in [
+        (axes[0], correct_local[:n_show],   cmap_correct,   "Correct"),
+        (axes[1], incorrect_local[:n_show], cmap_incorrect, "Incorrect"),
+    ]:
+        for li in local_idxs:
+            pts = proj[sample_ids == li]   # (T, 2)
+            T = pts.shape[0]
+            if T == 0:
+                continue
+            colors = [cmap(t / max(T - 1, 1)) for t in range(T)]
+
+            # ── init marker (before step 0) ──────────────────────────
+            ax.scatter(proj_inits[li, 0], proj_inits[li, 1],
+                        color="black", s=60, marker="x",
+                        linewidths=1.2, zorder=5, alpha=0.7)
+            # draw a faint dashed line from H_init → step 0
+            ax.plot([proj_inits[li, 0], pts[0, 0]],
+                    [proj_inits[li, 1], pts[0, 1]],
+                    color="gray", lw=0.6, linestyle="--",
+                    alpha=0.4, zorder=2)
+
+            # ── trajectory segments (colored by step) ──────────────────
+            for t in range(T - 1):
+                ax.plot(pts[t:t+2, 0], pts[t:t+2, 1],
+                        color=colors[t], lw=0.9, alpha=0.75, zorder=3)
+
+            # ── per-step dots ───────────────────────────────────────────
+            for t in range(T):
+                ax.scatter(pts[t, 0], pts[t, 1],
+                           color=colors[t], s=10, alpha=0.65,
+                           zorder=4, linewidths=0)
+
+            # ── start / end markers ─────────────────────────────────────
+            ax.scatter(pts[0, 0],  pts[0, 1],  color=colors[0],
+                       s=22, alpha=0.9, marker="o", zorder=6,
+                       edgecolors="white", linewidths=0.5)
+            ax.scatter(pts[-1, 0], pts[-1, 1], color=colors[-1],
+                       s=50, alpha=0.95, marker="*", zorder=6,
+                       edgecolors="white", linewidths=0.5)
+
+        ax.set_title(f"{title}  (n={len(local_idxs)})", fontsize=11)
+        ax.set_xlabel(f"PC1 ({pca.explained_variance_ratio_[0]*100:.1f}%)")
+        ax.set_ylabel(f"PC2 ({pca.explained_variance_ratio_[1]*100:.1f}%)")
+        ax.grid(True, lw=0.3, alpha=0.5)
+
+        # ── colorbar showing step progression ──────────────────────────
+        sm = plt.cm.ScalarMappable(cmap=cmap,
+                                   norm=plt.Normalize(vmin=0, vmax=1))
+        sm.set_array([])
+        plt.colorbar(sm, ax=ax, fraction=0.03, pad=0.04,
+                     label="step  (early → late)")
+
+    plt.suptitle(
+        f"{z_label}  PCA trajectories  ○=step1  ★=final   ✕=H_init",
+        fontsize=11
+    )
     plt.tight_layout()
     return fig
 
@@ -564,132 +639,153 @@ def _plot_residual_by_rating_colormap(residuals, ratings, flags, save_dir, z_lab
 
 
 def _plot_recursion_residual(
-    rec_z_H: List[np.ndarray],
-    rec_z_L: List[np.ndarray],
+    rec_z_H: List[np.ndarray],          # list of (T, H_cycles,         L, D)
+    rec_z_L: List[np.ndarray],          # list of (T, H_cycles*L_cycles, L, D)
     rec_correct_flags: List[bool],
     H_cycles: int,
     L_cycles: int,
     save_dir: str,
-):
-    """
-    Plot z_H and z_L residuals at recursion level.
-    z_H: H_cycles updates per supervision step (3 per step)
-    z_L: H_cycles * L_cycles updates per supervision step (18 per step)
-    x-axis: shared global forward index (0 to T * S_total - 1)
-    """
+    H_init: Optional[np.ndarray] = None,
+    L_init: Optional[np.ndarray] = None,
+) -> Optional[plt.Figure]:
     if not rec_z_H:
         return None
-
-    T       = rec_z_H[0].shape[0]
-    S_H     = H_cycles                  # 3
-    S_L     = H_cycles * L_cycles       # 18
-    S_total = H_cycles * (L_cycles + 1) # 21
-
-    # ── residual 計算 ──────────────────────────────────────────────────────
-    def _residual(arr):
-        # arr: (T, S, L, D)
+ 
+    T = rec_z_H[0].shape[0]
+ 
+    # ── residual helper ──────────────────────────────────────────────────────
+    def _residual(arr: np.ndarray, init: Optional[np.ndarray]) -> np.ndarray:
         T_, S_, L_, D_ = arr.shape
-        flat  = arr.reshape(T_ * S_, L_, D_).mean(axis=1)  # (T*S, D)
-        diffs = np.linalg.norm(
-            np.diff(flat, axis=0), axis=-1) / math.sqrt(D_)
-        return diffs  # (T*S - 1,)
-
-    correct_idxs   = [i for i, f in enumerate(rec_correct_flags) if f]
+        flat = arr.reshape(T_ * S_, L_, D_).mean(axis=1)   # (T*S, D)
+        if init is not None:
+            if hasattr(init, "detach"):
+                init_np = init.detach().cpu().numpy()
+            else:
+                init_np = np.asarray(init)
+            init_vec = init_np.reshape(-1, D_).mean(axis=0, keepdims=True)  # (1, D)
+            full = np.concatenate([init_vec, flat], axis=0)                 # (T*S+1, D)
+        else:
+            full = flat
+        return np.linalg.norm(np.diff(full, axis=0), axis=-1) / math.sqrt(D_)
+ 
+    # ── split by correctness ─────────────────────────────────────────────────
+    correct_idxs   = [i for i, f in enumerate(rec_correct_flags) if     f]
     incorrect_idxs = [i for i, f in enumerate(rec_correct_flags) if not f]
-
-    resid_H_c = [_residual(rec_z_H[i]) for i in correct_idxs]
-    resid_H_i = [_residual(rec_z_H[i]) for i in incorrect_idxs]
-    resid_L_c = [_residual(rec_z_L[i]) for i in correct_idxs]
-    resid_L_i = [_residual(rec_z_L[i]) for i in incorrect_idxs]
-
+ 
+    resid_H_c = [_residual(rec_z_H[i], H_init) for i in correct_idxs]
+    resid_H_i = [_residual(rec_z_H[i], H_init) for i in incorrect_idxs]
+    resid_L_c = [_residual(rec_z_L[i], L_init) for i in correct_idxs]
+    resid_L_i = [_residual(rec_z_L[i], L_init) for i in incorrect_idxs]
+ 
     if not resid_H_c and not resid_H_i:
         return None
+ 
+    N_H = T * H_cycles
+    N_L = T * H_cycles * L_cycles
+ 
+    def _x_axis(N: int, has_init: bool) -> np.ndarray:
+        return np.arange(1, N + 1, dtype=float) if has_init else np.arange(2, N + 1, dtype=float)
+ 
+    x_H = _x_axis(N_H, H_init is not None)
+    x_L = _x_axis(N_L, L_init is not None)
+ 
 
-    # ── x 座標：對應全局 forward index ────────────────────────────────────
-    # z_H snapshot positions: end of each H_cycle
-    x_H_snapshots = np.array([
-        t * S_total + (h + 1) * (L_cycles + 1) - 1
+    h_green  = [t * H_cycles for t in range(1, T + 1)]
+    l_green  = [t * (H_cycles * L_cycles) for t in range(1, T + 1)]
+ 
+    h_orange = [
+        t * H_cycles + h
         for t in range(T)
-        for h in range(H_cycles)
-    ])  # (T*H_cycles,) = (48,)
-
-    # z_L snapshot positions: each L_step within each H_cycle
-    x_L_snapshots = np.array([
-        t * S_total + h * (L_cycles + 1) + l
+        for h in range(1, H_cycles)          # within-step updates (not the last)
+    ]
+    l_orange = [
+        t * (H_cycles * L_cycles) + (h + 1) * L_cycles
         for t in range(T)
-        for h in range(H_cycles)
-        for l in range(L_cycles)
-    ])  # (T*H_cycles*L_cycles,) = (288,)
-
-    # residual x: use the position of the later snapshot
-    x_H = x_H_snapshots[1:].astype(float)  # (T*H_cycles - 1,) = (47,)
-    x_L = x_L_snapshots[1:].astype(float)  # (T*H_cycles*L_cycles - 1,) = (287,)
-
-    # boundary markers
-    step_boundaries  = [t * S_total for t in range(1, T)]
-    h_update_pos     = x_H_snapshots.tolist()
-
-    # ── figure ─────────────────────────────────────────────────────────────
-    fig, axes = plt.subplots(2, 1, figsize=(18, 8), constrained_layout=True)
-
+        for h in range(H_cycles - 1)         # z_H fires excl. step boundary
+    ]
+ 
+    # labeled tick positions: union of green + orange for each panel
+    h_labeled = set(h_green) | set(h_orange)   # = {1,2,3,...,48} all positions
+    l_labeled = set(l_green) | set(l_orange)   # = {6,12,18,...,288} every L_cycles
+ 
+    # ── figure ───────────────────────────────────────────────────────────────
+    fig, axes = plt.subplots(2, 1, figsize=(20, 9), constrained_layout=True)
+ 
     COLOR_CORRECT   = "steelblue"
     COLOR_INCORRECT = "firebrick"
-    ALPHA_IND       = 0.35   # individual curve alpha（原本 0.12，提高到 0.35）
-    LW_IND          = 0.8
-
-    for ax, label, x, resid_c, resid_i in [
-        (axes[0], "z_H", x_H, resid_H_c, resid_H_i),
-        (axes[1], "z_L", x_L, resid_L_c, resid_L_i),
-    ]:
+    COLOR_GREEN     = "seagreen"
+    COLOR_ORANGE    = "goldenrod"
+    ALPHA_IND       = 0.60
+    LW_IND          = 1.4
+ 
+    panels = [
+        (axes[0], "z_H", x_H, resid_H_c, resid_H_i,
+         h_green, h_orange, h_labeled, N_H, H_cycles),
+        (axes[1], "z_L", x_L, resid_L_c, resid_L_i,
+         l_green, l_orange, l_labeled, N_L, H_cycles * L_cycles),
+    ]
+ 
+    for ax, label, x, resid_c, resid_i, green_pos, orange_pos, labeled, N, ups in panels:
+ 
+        # trajectories
         for idx, resid in enumerate(resid_c):
-            ax.plot(x, resid,
-                    color=COLOR_CORRECT, alpha=ALPHA_IND, lw=LW_IND,
+            ax.plot(x, resid, color=COLOR_CORRECT, alpha=ALPHA_IND, lw=LW_IND,
                     label="Correct" if idx == 0 else None)
-
         for idx, resid in enumerate(resid_i):
-            ax.plot(x, resid,
-                    color=COLOR_INCORRECT, alpha=ALPHA_IND, lw=LW_IND,
+            ax.plot(x, resid, color=COLOR_INCORRECT, alpha=ALPHA_IND, lw=LW_IND,
                     label="Incorrect" if idx == 0 else None)
-
-        # boundary lines
-        for idx, xb in enumerate(step_boundaries):
-            ax.axvline(xb, color="gray", lw=0.8, ls="--", alpha=0.6,
+ 
+        # orange dashed: within-step z_H updates
+        for idx, xo in enumerate(orange_pos):
+            ax.axvline(xo, color=COLOR_ORANGE, lw=0.9, ls="--", alpha=0.65,
+                       label="z_H update (within step)" if idx == 0 else None)
+ 
+        # green solid: supervision step boundaries (drawn on top of orange)
+        for idx, xg in enumerate(green_pos):
+            ax.axvline(xg, color=COLOR_GREEN, lw=1.4, ls="-", alpha=0.80,
                        label="Supervision step boundary" if idx == 0 else None)
-
-        for idx, xh in enumerate(h_update_pos):
-            ax.axvline(xh, color="orange", lw=0.5, ls=":", alpha=0.5,
-                       label="z_H update (H_cycle end)" if idx == 0 else None)
-
-        # axes
-        ax.set_xlim(-1, T * S_total)
-        ax.set_ylabel(f"||{label}[t] - {label}[t-1]|| / √D", fontsize=10)
-        ax.set_xlabel("Global Forward Index", fontsize=10)
-
+ 
+        # ── x-axis: tick at every integer, label only at line positions ──────
+        ax.set_xlim(0.5, N + 0.5)
+        all_pos = np.arange(1, N + 1)
+        ax.set_xticks(all_pos)
+        tick_labels = [str(p) if p in labeled else "" for p in all_pos]
+        ax.set_xticklabels(tick_labels, fontsize=6, rotation=90)
+        ax.set_xlabel(f"{label} Update Index", fontsize=10)
+ 
+        # ── top axis: step labels centred on each step's x-range ─────────────
+        # step t (0-indexed) spans x = [t*ups+1 .. (t+1)*ups]
+        # centre = t*ups + (ups+1)/2
+        ax2 = ax.twiny()
+        ax2.set_xlim(ax.get_xlim())
+        step_centres = [t * ups + (ups + 1) / 2 for t in range(T)]
+        ax2.set_xticks(step_centres)
+        ax2.set_xticklabels([f"S{t + 1}" for t in range(T)], fontsize=8)
+        ax2.tick_params(axis="x", length=0)
+ 
+        ax.set_ylabel(f"‖{label}[k] − {label}[k−1]‖ / √D", fontsize=10)
         n_c = len(resid_c)
         n_i = len(resid_i)
-        updates_per_step = S_H if label == "z_H" else S_L
+        init_note = " (from init)" if (H_init if label == "z_H" else L_init) is not None else ""
         ax.set_title(
-            f"{label} Residual — Recursion Level  "
-            f"({updates_per_step} updates/step, "
-            f"correct n={n_c}, incorrect n={n_i})",
-            fontsize=11
+            f"{label} Residual{init_note} — "
+            f"{ups} updates/step,  correct n={n_c},  incorrect n={n_i}",
+            fontsize=11,
         )
-
-        # x tick: supervision step tag
-        tick_positions = [t * S_total + S_total // 2 for t in range(T)]
-        ax.set_xticks(tick_positions)
-        ax.set_xticklabels([f"S{t+1}" for t in range(T)], fontsize=8)
-
         ax.legend(fontsize=9, loc="upper right")
-        ax.grid(True, lw=0.3, alpha=0.4)
-
+        ax.grid(True, lw=0.3, alpha=0.3, axis="y")
+ 
+    init_str = (
+        "H_init & L_init included" if (H_init is not None and L_init is not None)
+        else "H_init included" if H_init is not None
+        else "L_init included" if L_init is not None
+        else "no init"
+    )
     plt.suptitle(
-        f"Recursion-Level Residual  "
-        f"(H_cycles={H_cycles}, L_cycles={L_cycles}, "
-        f"S_total={S_total} forwards/step)\n"
-        f"z_H: {T * H_cycles} updates total  |  "
-        f"z_L: {T * H_cycles * L_cycles} updates total  |  "
-        f"x-axis = global forward index (shared)",
-        fontsize=11
+        f"TRM Recursion-Level Residual  "
+        f"(H_cycles={H_cycles}, L_cycles={L_cycles}, T={T} steps, {init_str})\n"
+        f"z_H x-axis: {N_H} updates  |  z_L x-axis: {N_L} updates  |  "
+        f"Green solid = step boundary  |  Orange dashed = z_H update within step",
+        fontsize=11,
     )
     return fig
