@@ -25,7 +25,7 @@ from omegaconf import DictConfig
 
 from puzzle_dataset_with_rating import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
 from utils.functions import load_model_class, get_model_source_path, load_checkpoint_from_path
-from utils.matplot_figures import _plot_pca_split, _plot_pca_combined, _plot_forward_residual, _plot_pca_variance, _plot_displacement_hist, _plot_init_to_final_split, _plot_pos_residual_heatmap_given, _plot_pos_residual_heatmap_empty, _plot_pos_residual_by_step, _plot_rating_distribution, _plot_residual_vs_rating, _plot_accuracy_vs_rating, _plot_residual_by_rating_colormap, _plot_recursion_residual
+from utils.matplot_figures import _plot_pca_split, _plot_pca_combined, _plot_forward_residual, _plot_pca_variance, _plot_displacement_hist, _plot_init_to_final_split, _plot_pos_residual_heatmap_given, _plot_pos_residual_heatmap_empty, _plot_pos_residual_by_step, _plot_rating_distribution, _plot_residual_vs_rating, _plot_accuracy_vs_rating, _plot_residual_by_rating_colormap, _plot_recursion_residual, _plot_logit_lens_accuracy, _plot_pred_stability
 
 from models.losses.loss_fn import IGNORE_LABEL_ID
 from models.recursive_reasoning.trm_trace import ZTrace
@@ -159,7 +159,7 @@ def init_train_state(config: TraceConfig, metadata: PuzzleDatasetMetadata, rank:
     # Model
     model = load_model_from_checkpoint(config, metadata, rank, world_size)
 
-    # # Zero out H_init
+    # Zero out H_init and L_init
     # zero_H_init = torch.zeros_like(model.model.inner.H_init)
     # model.model.inner.H_init = zero_H_init.type_as(model.model.inner.H_init)
     # zero_L_init = torch.zeros_like(model.model.inner.L_init)
@@ -167,18 +167,49 @@ def init_train_state(config: TraceConfig, metadata: PuzzleDatasetMetadata, rank:
     # print("Zeroed out H_init and L_init")
     # print(model.model.inner.H_init)
     # print(model.model.inner.L_init)
+    
+    # Randomly initialize H_init and L_init
+    # seed = 42
+    # gen = torch.Generator(device='cuda').manual_seed(seed)
+    # random_init = torch.nn.init.trunc_normal_(
+    #     torch.empty_like(model.model.inner.H_init),
+    #     mean=0.0, std=1.0,
+    #     generator=gen
+    # )
+    # random_init_L = torch.nn.init.trunc_normal_(
+    #     torch.empty_like(model.model.inner.L_init),
+    #     mean=0.0, std=1.0,
+    #     generator=gen
+    # )
+    # model.model.inner.H_init = random_init.type_as(model.model.inner.H_init)
+    # model.model.inner.L_init = random_init_L.type_as(model.model.inner.L_init)
+    # print(f"Changed H_init and L_init to random with seed {seed}")
+    # print("H_init:", model.model.inner.H_init)
+    # print("L_init:", model.model.inner.L_init)
 
     # data = np.load("checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_44/z_analysis_step_0/z_raw.npz", allow_pickle=True)
     # trajs  = list(data["trajectories"])   # list of (T, D) — T steps, D hidden
+    # z_L_trajs = list(data["z_L_trajectories"])  # list of (T, D) — T steps, D hidden
     # flags  = list(data["correct_flags"])  # bool
     # correct_finals = np.stack([
     #     t[-1] for t, f in zip(trajs, flags) if f
     # ])  # (N_correct, D)
-    # centroid = correct_finals.mean(axis=0)
+    # correct_finals_L = np.stack([
+    #     t[-1] for t, f in zip(z_L_trajs, flags) if f
+    # ])  # (N_correct, D)
+    # centroid = correct_finals.astype(np.float32).mean(axis=0)
+    # centroid_L = correct_finals_L.astype(np.float32).mean(axis=0)
+    # centroid = torch.from_numpy(centroid)
+    # centroid_L = torch.from_numpy(centroid_L)
     # model.model.inner.H_init = centroid.type_as(model.model.inner.H_init)
+    # model.model.inner.L_init = centroid_L.type_as(model.model.inner.L_init)
+    # print("Changed H_init and L_init to correct centroid")
+    # print("H_init:", model.model.inner.H_init)
+    # print("L_init:", model.model.inner.L_init)
+
 
     return TrainState(
-        step=0,
+        step=0, 
         total_steps=total_steps,
 
         model=model,
@@ -231,6 +262,7 @@ def run_z_analysis(
         os.path.join(save_dir, "z_raw.npz"),
         correct_flags=np.array(collector.correct_flags),
         trajectories=np.array(collector.trajectories, dtype=object),
+        z_L_trajectories=np.array(collector.z_L_trajectories, dtype=object),
     )
     print(f"[z_analysis] saved z_raw.npz")
 
@@ -357,6 +389,8 @@ def run_z_analysis(
     wandb_log["z_analysis/z_L_pca_variance"] = _save_wandb(_plot_pca_variance(pca_L, save_dir, z_label="z_L"), save_dir, "z_L_pca_variance.png")
     wandb_log["z_analysis/z_L_displacement_hist"] = _save_wandb(_plot_displacement_hist(collector.z_L_trajectories, collector.correct_flags, save_dir, z_label="z_L"), save_dir, "z_L_displacement_histogram.png")
     wandb_log["z_analysis/z_L_pca_init_to_final"] = _save_wandb(_plot_init_to_final_split(proj_inits_L, proj_z_L, sample_ids, sub_flags, pca_L, save_dir, z_label="z_L"), save_dir, "z_L_pca_init_to_final.png")
+    wandb_log["z_analysis/logit_lens_accuracy"] = _save_wandb(_plot_logit_lens_accuracy(collector.step_cell_acc, collector.step_empty_acc, collector.step_given_acc, collector.correct_flags, save_dir), save_dir, "logit_lens_accuracy.png")
+    wandb_log["z_analysis/pred_stability_hist"] = _save_wandb(_plot_pred_stability(collector.step_pred_stable, collector.correct_flags, save_dir), save_dir, "pred_stability_hist.png")
     if collector.ratings:
         wandb_log["z_analysis/rating_distribution"] = _save_wandb(_plot_rating_distribution(collector.ratings, collector.correct_flags, save_dir), save_dir, "rating_distribution.png")
         wandb_log["z_analysis/residual_vs_rating"] = _save_wandb(_plot_residual_vs_rating(collector.residuals, collector.ratings, collector.correct_flags, save_dir), save_dir, "residual_vs_rating.png")

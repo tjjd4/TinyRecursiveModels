@@ -33,6 +33,14 @@ class ZTrace:
     rec_z_L: List[np.ndarray] = field(default_factory=list)
     rec_correct_flags: List[bool] = field(default_factory=list)
     rec_ratings: List[int] = field(default_factory=list)
+
+    # step-wise metrics
+    step_cell_acc: List[np.ndarray] = field(default_factory=list)       # (T,) overall cell accuracy
+    step_empty_acc: List[np.ndarray] = field(default_factory=list)      # (T,) empty cell accuracy  
+    step_given_acc: List[np.ndarray] = field(default_factory=list)      # (T,) given cell accuracy
+    step_pred_stable: List[int] = field(default_factory=list)           # scalar: earliest stable step
+    step_preds_all: List[np.ndarray] = field(default_factory=list)      # (T, 81) argmax predictions
+
     _rec_n_correct: int = 0
     _rec_n_incorrect: int = 0
 
@@ -52,6 +60,7 @@ class ZTrace:
         self._rec_z_L = []
         self._step_z_H = []
         self._step_z_L = []
+        self._step_preds = []
         self.trajectories = []
         self.z_L_trajectories = []
         self.correct_flags = []
@@ -64,6 +73,11 @@ class ZTrace:
         self.rec_z_L = []
         self.rec_correct_flags = []
         self.rec_ratings = []
+        self.step_cell_acc = []
+        self.step_empty_acc = []
+        self.step_given_acc = []
+        self.step_pred_stable = []
+        self.step_preds_all = []
         self._rec_n_correct = 0
         self._rec_n_incorrect = 0
         self.n_stored = 0
@@ -92,9 +106,10 @@ class ZTrace:
             return
         self._rec_z_H.append(z_H.detach())
 
-    def record_step(self, z_H: torch.Tensor, z_L: torch.Tensor) -> None:
+    def record_step(self, z_H: torch.Tensor, z_L: torch.Tensor, output: torch.Tensor) -> None:
         self._step_z_H.append(z_H.detach())
         self._step_z_L.append(z_L.detach())
+        self._step_preds.append(torch.argmax(output, dim=-1))
 
 
     def clear_batch_buffers(self) -> None:
@@ -103,6 +118,7 @@ class ZTrace:
         self._rec_z_L.clear()
         self._step_z_H.clear()
         self._step_z_L.clear()
+        self._step_preds.clear()
         # Update flag: should we collect recursion trace for the next batch?
         # Collect if we haven't reached the max for either correct or incorrect
         self.is_all_trace_collected = (
@@ -137,6 +153,7 @@ class ZTrace:
 
         step_z_H_np = torch.stack(self._step_z_H).cpu().float().numpy()  # (n_steps, B, L, D)
         step_z_L_np = torch.stack(self._step_z_L).cpu().float().numpy()  # (n_steps, B, L, D)
+        step_preds_np = torch.stack(self._step_preds).cpu().numpy()  # (n_steps, B, seq_len, n_classes)
 
         # rec_z_H/L are called snapshots_per_step times per supervision step
         if self._rec_z_H:
@@ -148,6 +165,7 @@ class ZTrace:
 
         self._step_z_H.clear()
         self._step_z_L.clear()
+        self._step_preds.clear()
         self._rec_z_H.clear()
         self._rec_z_L.clear()
 
@@ -187,7 +205,7 @@ class ZTrace:
             z_L_traj = z_L_cell.mean(axis=1)
 
             # given mask from first 81 cell tokens
-            given = batch_inputs_np[b, :81] != 1  # (81,)
+            given = batch_inputs_np[b, :] != 1  # (81,)
 
             # step-wise residuals
             if T_actual > 1:
@@ -199,6 +217,31 @@ class ZTrace:
                 z_L_diffs = np.array([0.0])
                 pos_diffs = np.zeros((1, L))
 
+            sample_step_preds = step_preds_np[:T_actual, b, :]   # (T_actual, 81)
+            cell_labels = labels_np[b, :]                         # (81,)
+            cell_mask = (cell_labels != -100)                       # (81,)
+            empty = ~given & cell_mask
+
+            # per-step correctness: (T_actual, 81) bool
+            per_step_correct = (sample_step_preds == cell_labels[None, :]) & cell_mask[None, :]
+
+            n_valid = cell_mask.sum()
+            n_given = (given & cell_mask).sum()
+            n_empty = empty.sum()
+
+            cell_acc = per_step_correct[:, cell_mask].sum(axis=1).astype(np.float32) / max(n_valid, 1)
+            given_acc = per_step_correct[:, given & cell_mask].sum(axis=1).astype(np.float32) / max(n_given, 1)
+            empty_acc = per_step_correct[:, empty].sum(axis=1).astype(np.float32) / max(n_empty, 1)
+
+            # prediction stability: start from the last step and go backwards, the earliest step that makes the prediction no longer change
+            stable_step = T_actual
+            final_pred = sample_step_preds[-1]
+            for k in range(T_actual - 2, -1, -1):
+                if np.array_equal(sample_step_preds[k], final_pred):
+                    stable_step = k+1
+                else:
+                    break
+
             self.trajectories.append(z_H_traj)
             self.z_L_trajectories.append(z_L_traj)
             self.correct_flags.append(is_correct)
@@ -207,6 +250,11 @@ class ZTrace:
             self.residuals.append(diffs)
             self.z_L_residuals.append(z_L_diffs)
             self.pos_residuals.append(pos_diffs)
+            self.step_cell_acc.append(cell_acc)
+            self.step_empty_acc.append(empty_acc)
+            self.step_given_acc.append(given_acc)
+            self.step_pred_stable.append(stable_step)
+            self.step_preds_all.append(sample_step_preds.astype(np.int16))
             self.n_stored += 1
 
             # recursion level
@@ -243,6 +291,8 @@ class ZTrace:
             "residuals": len(self.residuals),
             "z_L_residuals": len(self.z_L_residuals),
             "pos_residuals": len(self.pos_residuals),
+            "step_cell_acc": len(self.step_cell_acc),
+            "step_pred_stable": len(self.step_pred_stable),
         }
         ok = len(set(lens.values())) == 1
         print(f"\n[ZTrace] supervision step alignment: {'OK' if ok else 'FAILED'}")

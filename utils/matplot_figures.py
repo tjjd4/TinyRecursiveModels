@@ -789,3 +789,86 @@ def _plot_recursion_residual(
         fontsize=11,
     )
     return fig
+
+
+def _plot_logit_lens_accuracy(step_cell_acc, step_empty_acc, step_given_acc, correct_flags: List[bool], save_dir: str):
+    """Per-step cell accuracy, split by correct/incorrect and given/empty."""
+    max_T = max(a.shape[0] for a in step_cell_acc)
+    
+    def _padded_mean(indices, acc_list):
+        if not indices:
+            return np.full(max_T, np.nan)
+        arrs = []
+        for i in indices:
+            a = acc_list[i]
+            padded = np.pad(a, (0, max_T - len(a)), constant_values=np.nan)
+            arrs.append(padded)
+        return np.nanmean(arrs, axis=0)
+    
+    correct_idx = [i for i, f in enumerate(correct_flags) if f]
+    incorrect_idx = [i for i, f in enumerate(correct_flags) if not f]
+    
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    steps = np.arange(1, max_T + 1)
+    
+    # Left: overall cell accuracy
+    ax = axes[0]
+    ax.plot(steps, _padded_mean(correct_idx, step_cell_acc), 
+            'g-o', ms=4, label='Correct puzzles')
+    ax.plot(steps, _padded_mean(incorrect_idx, step_cell_acc), 
+            'r-o', ms=4, label='Incorrect puzzles')
+    ax.set_xlabel('Supervision Step')
+    ax.set_ylabel('Cell-level Accuracy')
+    ax.set_xticks(steps)
+    ax.set_title('Per-step Cell Accuracy (Logit Lens)')
+    ax.legend()
+    ax.set_ylim(0, 1.05)
+    ax.grid(True, alpha=0.3)
+    
+    # Right: empty cell accuracy only
+    ax = axes[1]
+    ax.plot(steps, _padded_mean(correct_idx, step_empty_acc),
+            'g-o', ms=4, label='Correct (empty cells)')
+    ax.plot(steps, _padded_mean(incorrect_idx, step_empty_acc),
+            'r-o', ms=4, label='Incorrect (empty cells)')
+    ax.plot(steps, _padded_mean(correct_idx, step_given_acc),
+            'g--s', ms=4, alpha=0.5, label='Correct (given cells)')
+    ax.plot(steps, _padded_mean(incorrect_idx, step_given_acc),
+            'r--s', ms=4, alpha=0.5, label='Incorrect (given cells)')
+    ax.set_xlabel('Supervision Step')
+    ax.set_ylabel('Cell-level Accuracy')
+    ax.set_xticks(steps)
+    ax.set_title('Per-step Accuracy by Cell Type')
+    ax.legend(fontsize=8)
+    ax.set_ylim(0, 1.05)
+    ax.grid(True, alpha=0.3)
+    
+    fig.tight_layout()
+    return fig
+
+
+def _plot_pred_stability(step_pred_stable, correct_flags: List[bool], save_dir: str):
+    """Histogram of 'stable match' step, split by correct/incorrect."""
+    fig, ax = plt.subplots(figsize=(8, 5))
+    
+    correct_stable = [step_pred_stable[i] 
+                      for i, f in enumerate(correct_flags) if f]
+    incorrect_stable = [step_pred_stable[i] 
+                        for i, f in enumerate(correct_flags) if not f]
+    
+    max_T = max(step_pred_stable) + 1 if step_pred_stable else 16
+    bins = np.arange(0, max_T + 1) - 0.5
+    
+    ax.hist(correct_stable, bins=bins, alpha=0.6, color='green', 
+            label=f'Correct (mean={np.mean(correct_stable):.1f})', density=True)
+    ax.hist(incorrect_stable, bins=bins, alpha=0.6, color='red',
+            label=f'Incorrect (mean={np.mean(incorrect_stable):.1f})', density=True)
+    ax.set_xlabel('Stable Match Step (prediction stops changing)')
+    ax.set_ylabel('Density')
+    ax.set_title('Prediction Stability (Early Stopping Analysis)')
+    ax.set_xticks(np.arange(1, max_T))
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    fig.tight_layout()
+    return fig
