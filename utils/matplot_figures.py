@@ -791,62 +791,6 @@ def _plot_recursion_residual(
     return fig
 
 
-def _plot_logit_lens_accuracy(step_cell_acc, step_empty_acc, step_given_acc, correct_flags: List[bool], save_dir: str):
-    """Per-step cell accuracy, split by correct/incorrect and given/empty."""
-    max_T = max(a.shape[0] for a in step_cell_acc)
-    
-    def _padded_mean(indices, acc_list):
-        if not indices:
-            return np.full(max_T, np.nan)
-        arrs = []
-        for i in indices:
-            a = acc_list[i]
-            padded = np.pad(a, (0, max_T - len(a)), constant_values=np.nan)
-            arrs.append(padded)
-        return np.nanmean(arrs, axis=0)
-    
-    correct_idx = [i for i, f in enumerate(correct_flags) if f]
-    incorrect_idx = [i for i, f in enumerate(correct_flags) if not f]
-    
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    steps = np.arange(1, max_T + 1)
-    
-    # Left: overall cell accuracy
-    ax = axes[0]
-    ax.plot(steps, _padded_mean(correct_idx, step_cell_acc), 
-            'g-o', ms=4, label='Correct puzzles')
-    ax.plot(steps, _padded_mean(incorrect_idx, step_cell_acc), 
-            'r-o', ms=4, label='Incorrect puzzles')
-    ax.set_xlabel('Supervision Step')
-    ax.set_ylabel('Cell-level Accuracy')
-    ax.set_xticks(steps)
-    ax.set_title('Per-step Cell Accuracy (Logit Lens)')
-    ax.legend()
-    ax.set_ylim(0, 1.05)
-    ax.grid(True, alpha=0.3)
-    
-    # Right: empty cell accuracy only
-    ax = axes[1]
-    ax.plot(steps, _padded_mean(correct_idx, step_empty_acc),
-            'g-o', ms=4, label='Correct (empty cells)')
-    ax.plot(steps, _padded_mean(incorrect_idx, step_empty_acc),
-            'r-o', ms=4, label='Incorrect (empty cells)')
-    ax.plot(steps, _padded_mean(correct_idx, step_given_acc),
-            'g--s', ms=4, alpha=0.5, label='Correct (given cells)')
-    ax.plot(steps, _padded_mean(incorrect_idx, step_given_acc),
-            'r--s', ms=4, alpha=0.5, label='Incorrect (given cells)')
-    ax.set_xlabel('Supervision Step')
-    ax.set_ylabel('Cell-level Accuracy')
-    ax.set_xticks(steps)
-    ax.set_title('Per-step Accuracy by Cell Type')
-    ax.legend(fontsize=8)
-    ax.set_ylim(0, 1.05)
-    ax.grid(True, alpha=0.3)
-    
-    fig.tight_layout()
-    return fig
-
-
 def _plot_pred_stability(step_pred_stable, correct_flags: List[bool], save_dir: str):
     """Histogram of 'stable match' step, split by correct/incorrect."""
     fig, ax = plt.subplots(figsize=(8, 5))
@@ -870,5 +814,170 @@ def _plot_pred_stability(step_pred_stable, correct_flags: List[bool], save_dir: 
     ax.legend()
     ax.grid(True, alpha=0.3)
     
+    fig.tight_layout()
+    return fig
+
+def _padded_mean(indices, acc_list, max_T):
+    if not indices:
+        return np.full(max_T, np.nan)
+    arrs = []
+    for i in indices:
+        a = acc_list[i]
+        padded = np.pad(a, (0, max_T - len(a)), constant_values=np.nan)
+        arrs.append(padded)
+    return np.nanmean(arrs, axis=0)
+
+
+def _split_indices(correct_flags):
+    correct_idx = [i for i, f in enumerate(correct_flags) if f]
+    incorrect_idx = [i for i, f in enumerate(correct_flags) if not f]
+    return correct_idx, incorrect_idx
+
+
+def _plot_logit_lens_accuracy(step_cell_acc, step_empty_acc, step_given_acc, correct_flags: List[bool], save_dir: str, z_label: str = "z_H"):
+    """
+    Per-step cell accuracy, split by correct/incorrect and given/empty.
+    Works for both z_H and z_L by changing channel_name.
+    """
+    max_T = max(a.shape[0] for a in step_cell_acc)
+    correct_idx, incorrect_idx = _split_indices(correct_flags)
+    steps = np.arange(1, max_T + 1)
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Left: overall cell accuracy
+    ax = axes[0]
+    ax.plot(steps, _padded_mean(correct_idx, step_cell_acc, max_T),
+            'g-o', ms=4, label='Correct puzzles')
+    ax.plot(steps, _padded_mean(incorrect_idx, step_cell_acc, max_T),
+            'r-o', ms=4, label='Incorrect puzzles')
+    ax.set_xlabel('Supervision Step')
+    ax.set_ylabel('Cell-level Accuracy')
+    ax.set_xticks(steps)
+    ax.set_title(f'Per-step Cell Accuracy — {z_label} Logit Lens')
+    ax.legend()
+    ax.set_ylim(0, 1.05)
+    ax.grid(True, alpha=0.3)
+
+    # Right: by cell type
+    ax = axes[1]
+    ax.plot(steps, _padded_mean(correct_idx, step_empty_acc, max_T),
+            'g-o', ms=4, label='Correct (empty cells)')
+    ax.plot(steps, _padded_mean(incorrect_idx, step_empty_acc, max_T),
+            'r-o', ms=4, label='Incorrect (empty cells)')
+    ax.plot(steps, _padded_mean(correct_idx, step_given_acc, max_T),
+            'g--s', ms=4, alpha=0.5, label='Correct (given cells)')
+    ax.plot(steps, _padded_mean(incorrect_idx, step_given_acc, max_T),
+            'r--s', ms=4, alpha=0.5, label='Incorrect (given cells)')
+    ax.set_xlabel('Supervision Step')
+    ax.set_ylabel('Cell-level Accuracy')
+    ax.set_xticks(steps)
+    ax.set_title(f'Per-step Accuracy by Cell Type — {z_label} Logit Lens')
+    ax.legend(fontsize=8)
+    ax.set_ylim(0, 1.05)
+    ax.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+    return fig
+
+def _plot_disagreement(
+    empty_both_correct, empty_both_wrong_same, empty_both_wrong_diff,
+    empty_only_z_H_correct, empty_only_z_L_correct,
+    given_both_correct, given_both_wrong_same, given_both_wrong_diff,
+    given_only_z_H_correct, given_only_z_L_correct,
+    correct_flags: List[bool],
+    save_dir: str,
+):
+    """
+    Per-step z_H vs z_L prediction agreement, split by cell type.
+    5 mutually exclusive categories that sum to 1.0.
+    Top row: empty cells, Bottom row: given cells.
+    """
+    max_T = max(a.shape[0] for a in empty_both_correct)
+    correct_idx, incorrect_idx = _split_indices(correct_flags)
+    steps = np.arange(1, max_T + 1)
+ 
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharex=True, sharey=True)
+ 
+    datasets = [
+        (axes[0], "Empty Cells",
+         empty_both_correct, empty_both_wrong_same, empty_both_wrong_diff,
+         empty_only_z_H_correct, empty_only_z_L_correct),
+        (axes[1], "Given Cells",
+         given_both_correct, given_both_wrong_same, given_both_wrong_diff,
+         given_only_z_H_correct, given_only_z_L_correct),
+    ]
+ 
+    labels = ['Both correct', 'Both wrong (same)', 'Both wrong (diff)',
+              'Only z_H correct', 'Only z_L correct']
+    colors = ['#4CAF50', '#D32F2F', '#FF8A65', '#1976D2', '#7B1FA2']
+ 
+    for ax_row, cell_type, bc, bws, bwd, ohc, olc in datasets:
+        for ax, idx, puzzle_type in [
+            (ax_row[0], correct_idx, "Correct Puzzles"),
+            (ax_row[1], incorrect_idx, "Incorrect Puzzles"),
+        ]:
+            vals = [_padded_mean(idx, d, max_T) for d in [bc, bws, bwd, ohc, olc]]
+ 
+            ax.stackplot(steps, *vals,
+                         labels=labels, colors=colors, alpha=0.8)
+            ax.set_title(f'{cell_type} — {puzzle_type}')
+            ax.legend(loc='center right', fontsize=7)
+            ax.set_ylim(0, 1.05)
+            ax.grid(True, alpha=0.3)
+ 
+    for ax in axes[:, 0]:
+        ax.set_ylabel('Proportion of Cells')
+    for ax in axes[1]:
+        ax.set_xlabel('Supervision Step')
+        ax.set_xticks(steps)
+ 
+    fig.tight_layout()
+    return fig
+
+def _plot_cosine_similarity(empty_cos_sim, given_cos_sim, correct_flags: List[bool], save_dir: str):
+    def _padded_stats(indices, data_list, max_T):
+        if not indices:
+            return np.full(max_T, np.nan), np.full(max_T, np.nan)
+        arrs = []
+        for i in indices:
+            a = data_list[i]
+            padded = np.pad(a, (0, max_T - len(a)), constant_values=np.nan)
+            arrs.append(padded)
+        stacked = np.array(arrs)
+        return np.nanmean(stacked, axis=0), np.nanstd(stacked, axis=0)
+    """
+    Per-step cosine similarity between z_H and z_L, 4 lines:
+    given-correct, given-incorrect, empty-correct, empty-incorrect.
+    """
+    max_T = max(a.shape[0] for a in empty_cos_sim)
+    correct_idx, incorrect_idx = _split_indices(correct_flags)
+    steps = np.arange(1, max_T + 1)
+ 
+    fig, ax = plt.subplots(1, 1, figsize=(10, 6))
+ 
+    lines = [
+        (correct_idx, given_cos_sim, 'green', '--s', 'Given — Correct'),
+        (incorrect_idx, given_cos_sim, 'red', '--s', 'Given — Incorrect'),
+        (correct_idx, empty_cos_sim, 'green', '-o', 'Empty — Correct'),
+        (incorrect_idx, empty_cos_sim, 'red', '-o', 'Empty — Incorrect'),
+    ]
+ 
+    for idx, data, color, fmt, label in lines:
+        mean, std = _padded_stats(idx, data, max_T)
+        is_given = '--' in fmt
+        alpha_fill = 0.08 if is_given else 0.15
+        ax.plot(steps, mean, fmt, color=color, ms=4,
+                alpha=0.5 if is_given else 1.0, label=label)
+        ax.fill_between(steps, mean - std, mean + std,
+                        color=color, alpha=alpha_fill)
+ 
+    ax.set_xlabel('Supervision Step')
+    ax.set_ylabel('Cosine Similarity (z_H, z_L)')
+    ax.set_xticks(steps)
+    ax.set_title('Per-step Cosine Similarity between z_H and z_L')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+ 
     fig.tight_layout()
     return fig

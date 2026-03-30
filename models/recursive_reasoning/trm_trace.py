@@ -58,7 +58,9 @@ class TinyRecursiveReasoningModel_ACTV1_Inner_Trace(TinyRecursiveReasoningModel_
         output = self.lm_head(z_H)[:, self.puzzle_emb_len:]
         q_logits = self.q_head(z_H[:, 0]).to(torch.float32)
 
-        trace.record_step(z_H, z_L, output)
+        z_L_logit_lens = self.lm_head(z_L)[:, self.puzzle_emb_len:] 
+
+        trace.record_step(z_H, z_L, output, z_L_logit_lens)
 
         return new_carry, output, (q_logits[..., 0], q_logits[..., 1])
 

@@ -56,11 +56,15 @@ class ZTrace:
         self.rec_max_correct = rec_max_correct
         self.rec_max_incorrect = rec_max_incorrect
 
+        # record
         self._rec_z_H = []
         self._rec_z_L = []
         self._step_z_H = []
         self._step_z_L = []
         self._step_preds = []
+        self._step_z_L_preds = []
+
+        # step level trajectories
         self.trajectories = []
         self.z_L_trajectories = []
         self.correct_flags = []
@@ -69,15 +73,43 @@ class ZTrace:
         self.residuals = []
         self.z_L_residuals = []
         self.pos_residuals = []
+
+        # recursion level z_H and z_L
         self.rec_z_H = []
         self.rec_z_L = []
         self.rec_correct_flags = []
         self.rec_ratings = []
+
+        # z_H logit lens
         self.step_cell_acc = []
         self.step_empty_acc = []
         self.step_given_acc = []
         self.step_pred_stable = []
         self.step_preds_all = []
+        # z_L logit lens accuracy
+        self.step_z_L_cell_acc = []
+        self.step_z_L_empty_acc = []
+        self.step_z_L_given_acc = []
+        self.step_z_L_preds_all = []
+
+        # z_H vs z_L comparison
+        # empty cells
+        self.step_empty_agree_correct = []
+        self.step_empty_both_wrong_same = []
+        self.step_empty_both_wrong_diff = []
+        self.step_empty_only_z_H_correct = []
+        self.step_empty_only_z_L_correct = []
+        # given cells
+        self.step_given_agree_correct = []
+        self.step_given_both_wrong_same = []
+        self.step_given_both_wrong_diff = []
+        self.step_given_only_z_H_correct = []
+        self.step_given_only_z_L_correct = []
+        
+        # cosine similarity
+        self.step_empty_cos_sim = []
+        self.step_given_cos_sim = []
+
         self._rec_n_correct = 0
         self._rec_n_incorrect = 0
         self.n_stored = 0
@@ -106,10 +138,11 @@ class ZTrace:
             return
         self._rec_z_H.append(z_H.detach())
 
-    def record_step(self, z_H: torch.Tensor, z_L: torch.Tensor, output: torch.Tensor) -> None:
+    def record_step(self, z_H: torch.Tensor, z_L: torch.Tensor, output: torch.Tensor, z_L_logit_lens: torch.Tensor) -> None:
         self._step_z_H.append(z_H.detach())
         self._step_z_L.append(z_L.detach())
         self._step_preds.append(torch.argmax(output, dim=-1))
+        self._step_z_L_preds.append(torch.argmax(z_L_logit_lens, dim=-1))
 
 
     def clear_batch_buffers(self) -> None:
@@ -119,6 +152,7 @@ class ZTrace:
         self._step_z_H.clear()
         self._step_z_L.clear()
         self._step_preds.clear()
+        self._step_z_L_preds.clear()
         # Update flag: should we collect recursion trace for the next batch?
         # Collect if we haven't reached the max for either correct or incorrect
         self.is_all_trace_collected = (
@@ -154,6 +188,7 @@ class ZTrace:
         step_z_H_np = torch.stack(self._step_z_H).cpu().float().numpy()  # (n_steps, B, L, D)
         step_z_L_np = torch.stack(self._step_z_L).cpu().float().numpy()  # (n_steps, B, L, D)
         step_preds_np = torch.stack(self._step_preds).cpu().numpy()  # (n_steps, B, seq_len, n_classes)
+        step_z_L_preds_np = torch.stack(self._step_z_L_preds).cpu().numpy()  # (n_steps, B, seq_len, n_classes)
 
         # rec_z_H/L are called snapshots_per_step times per supervision step
         if self._rec_z_H:
@@ -241,6 +276,58 @@ class ZTrace:
                     stable_step = k+1
                 else:
                     break
+            
+            # z_L logit lens
+            sample_z_L_preds = step_z_L_preds_np[:T_actual, b, :]  # (T_actual, 81)
+
+            z_L_per_step_correct = (sample_z_L_preds == cell_labels[None, :]) & cell_mask[None, :]
+
+            z_L_cell_acc = z_L_per_step_correct[:, cell_mask].sum(axis=1).astype(np.float32) / max(n_valid, 1)
+            z_L_given_acc = z_L_per_step_correct[:, given & cell_mask].sum(axis=1).astype(np.float32) / max(n_given, 1)
+            z_L_empty_acc = z_L_per_step_correct[:, empty].sum(axis=1).astype(np.float32) / max(n_empty, 1)
+
+            # z_H logit lens vs z_L logit lens
+            both_correct = per_step_correct & z_L_per_step_correct          # (T, 81)
+            both_wrong_same = (~per_step_correct & ~z_L_per_step_correct & (sample_step_preds == sample_z_L_preds))    # (T, 81)
+            both_wrong_diff = (~per_step_correct & ~z_L_per_step_correct & (sample_step_preds != sample_z_L_preds))
+            only_z_H_correct = per_step_correct & ~z_L_per_step_correct
+            only_z_L_correct = ~per_step_correct & z_L_per_step_correct
+
+            # per-step proportion of empty cells
+            n_e = max(n_empty, 1)
+            empty_agree_correct_rate = both_correct[:, empty].sum(axis=1).astype(np.float32) / n_e
+            empty_both_wrong_same_rate = both_wrong_same[:, empty].sum(axis=1).astype(np.float32) / n_e
+            empty_both_wrong_diff_rate = both_wrong_diff[:, empty].sum(axis=1).astype(np.float32) / n_e
+            empty_only_z_H_correct_rate = only_z_H_correct[:, empty].sum(axis=1).astype(np.float32) / n_e
+            empty_only_z_L_correct_rate = only_z_L_correct[:, empty].sum(axis=1).astype(np.float32) / n_e
+
+            # per-step proportion of given cells
+            given_valid = given & cell_mask
+            n_g = max(n_given, 1)
+            given_agree_correct_rate = both_correct[:, given_valid].sum(axis=1).astype(np.float32) / n_g
+            given_both_wrong_same_rate = both_wrong_same[:, given_valid].sum(axis=1).astype(np.float32) / n_g
+            given_both_wrong_diff_rate = both_wrong_diff[:, given_valid].sum(axis=1).astype(np.float32) / n_g
+            given_only_z_H_correct_rate = only_z_H_correct[:, given_valid].sum(axis=1).astype(np.float32) / n_g
+            given_only_z_L_correct_rate = only_z_L_correct[:, given_valid].sum(axis=1).astype(np.float32) / n_g
+
+            # per-step cosine similarity between z_H and z_L
+            empty_cos_sim = np.array([
+                np.mean([
+                    np.dot(z_H_cell[t, c], z_L_cell[t, c])
+                    / (np.linalg.norm(z_H_cell[t, c]) * np.linalg.norm(z_L_cell[t, c]) + 1e-8)
+                    for c in range(81) if empty[c]
+                ]) if empty.any() else np.nan
+                for t in range(T_actual)
+            ])
+
+            given_cos_sim = np.array([
+                np.mean([
+                    np.dot(z_H_cell[t, c], z_L_cell[t, c])
+                    / (np.linalg.norm(z_H_cell[t, c]) * np.linalg.norm(z_L_cell[t, c]) + 1e-8)
+                    for c in range(81) if given[c]
+                ]) if given.any() else np.nan
+                for t in range(T_actual)
+            ])
 
             self.trajectories.append(z_H_traj)
             self.z_L_trajectories.append(z_L_traj)
@@ -255,6 +342,22 @@ class ZTrace:
             self.step_given_acc.append(given_acc)
             self.step_pred_stable.append(stable_step)
             self.step_preds_all.append(sample_step_preds.astype(np.int16))
+            self.step_z_L_cell_acc.append(z_L_cell_acc)
+            self.step_z_L_empty_acc.append(z_L_empty_acc)
+            self.step_z_L_given_acc.append(z_L_given_acc)
+            self.step_z_L_preds_all.append(sample_z_L_preds.astype(np.int16))
+            self.step_empty_agree_correct.append(empty_agree_correct_rate)
+            self.step_empty_both_wrong_same.append(empty_both_wrong_same_rate)
+            self.step_empty_both_wrong_diff.append(empty_both_wrong_diff_rate)
+            self.step_empty_only_z_H_correct.append(empty_only_z_H_correct_rate)
+            self.step_empty_only_z_L_correct.append(empty_only_z_L_correct_rate)
+            self.step_given_agree_correct.append(given_agree_correct_rate)
+            self.step_given_both_wrong_same.append(given_both_wrong_same_rate)
+            self.step_given_both_wrong_diff.append(given_both_wrong_diff_rate)
+            self.step_given_only_z_H_correct.append(given_only_z_H_correct_rate)
+            self.step_given_only_z_L_correct.append(given_only_z_L_correct_rate)
+            self.step_empty_cos_sim.append(empty_cos_sim)
+            self.step_given_cos_sim.append(given_cos_sim)
             self.n_stored += 1
 
             # recursion level
