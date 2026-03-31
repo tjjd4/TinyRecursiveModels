@@ -564,11 +564,12 @@ def launch(hydra_config: DictConfig):
     train_state.model.eval()
 
     z_trace = None
+    puzzle_emb_len = config.arch.puzzle_emb_len if hasattr(config.arch, "puzzle_emb_len") else train_state.model.model.inner.puzzle_emb_len
     if RANK == 0:
         z_trace = ZTrace(
             H_cycles = config.arch.H_cycles,
             L_cycles = config.arch.L_cycles,
-            puzzle_emb_len = config.arch.puzzle_emb_len,
+            puzzle_emb_len = puzzle_emb_len,
             halt_max_steps = config.arch.halt_max_steps,
             rec_max_correct = 50,
             rec_max_incorrect = 50,
@@ -576,7 +577,7 @@ def launch(hydra_config: DictConfig):
         print(f"[z_analysis] Enabled\n"
               f"H_cycles={config.arch.H_cycles}\n"
               f"L_cycles={config.arch.L_cycles}\n"
-              f"puzzle_emb_len={config.arch.puzzle_emb_len}\n"
+              f"puzzle_emb_len={puzzle_emb_len}\n"
               f"halt_max_steps={config.arch.halt_max_steps}\n"
               f"snapshots_per_step={z_trace.snapshots_per_step}")
 
