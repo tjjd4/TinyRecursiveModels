@@ -1,4 +1,4 @@
-name: recursive_reasoning.trm_learn_z0@TinyRecursiveReasoningModel_ACTV1
+name: recursive_reasoning.trm_seperate@TinyRecursiveReasoningModel_ACTV1
 loss:
   name: losses.act_loss@ACTLossHead
   loss_type: stablemax_cross_entropy
@@ -9,7 +9,7 @@ halt_max_steps: 16
 H_cycles: 3
 L_cycles: 6
 
-H_layers: 0
+H_layers: 2
 L_layers: 2
 
 hidden_size: 512
