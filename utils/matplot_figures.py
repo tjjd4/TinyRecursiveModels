@@ -4,6 +4,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import matplotlib.patches as mpatches
 from matplotlib.lines import Line2D
+import matplotlib.gridspec as gridspec
+
+from utils.math import linear_cka
 
 # individual plot functions (each returns fig for wandb logging)
 
@@ -979,5 +982,82 @@ def _plot_cosine_similarity(empty_cos_sim, given_cos_sim, correct_flags: List[bo
     ax.legend()
     ax.grid(True, alpha=0.3)
  
+    fig.tight_layout()
+    return fig
+
+
+def _plot_cka_matrices(all_z, correct_mask, save_dir: str, z_label: str = "z_H"):
+    """
+    all_z: (N, T, D) numpy array, mean-pooled over cell positions
+    correct_mask: (N,) bool array
+    """
+    def compute_cka_matrix(Z):
+        """
+        Z: (N, T, D) — N puzzles, T steps, D hidden dim
+        Returns: (T, T) CKA matrix
+        """
+        T = Z.shape[1]
+        cka_mat = np.zeros((T, T))
+        for i in range(T):
+            for j in range(i, T):
+                val = linear_cka(Z[:, i, :], Z[:, j, :])
+                cka_mat[i, j] = val
+                cka_mat[j, i] = val
+        return cka_mat
+
+    all_z = np.array(all_z)           # (N, T, D)
+    correct_mask = np.array(correct_mask, dtype=bool)  # (N,)
+
+    z_correct   = all_z[correct_mask]    # (N_c, T, D)
+    z_incorrect = all_z[~correct_mask]   # (N_i, T, D)
+
+    print(f"Computing CKA for {z_correct.shape[0]} correct puzzles...")
+    cka_correct   = compute_cka_matrix(z_correct)
+    print(f"Computing CKA for {z_incorrect.shape[0]} incorrect puzzles...")
+    cka_incorrect = compute_cka_matrix(z_incorrect)
+    diff_matrix   = cka_correct - cka_incorrect
+
+    T = cka_correct.shape[0]
+    tick_labels = [str(i+1) for i in range(T)]
+
+    fig = plt.figure(figsize=(18, 5.5))
+    gs  = gridspec.GridSpec(1, 4, width_ratios=[1, 1, 1, 0.05], wspace=0.35)
+
+    ax0 = fig.add_subplot(gs[0])
+    ax1 = fig.add_subplot(gs[1])
+    ax2 = fig.add_subplot(gs[2])
+    cax = fig.add_subplot(gs[3])
+
+    im_kwargs = dict(vmin=0, vmax=1, cmap='viridis', aspect='auto')
+    diff_max  = np.abs(diff_matrix).max()
+
+    im0 = ax0.imshow(cka_correct,   **im_kwargs)
+    im1 = ax1.imshow(cka_incorrect, **im_kwargs)
+    im2 = ax2.imshow(diff_matrix,   vmin=-diff_max, vmax=diff_max,
+                     cmap='RdBu_r', aspect='auto')
+
+    for ax, title in zip([ax0, ax1, ax2], [
+        f'{z_label} CKA — Correct (n={z_correct.shape[0]:,})',
+        f'{z_label} CKA — Incorrect (n={z_incorrect.shape[0]:,})',
+        'Difference (Correct − Incorrect)'
+    ]):
+        ax.set_title(title, fontsize=11)
+        ax.set_xticks(range(T))
+        ax.set_yticks(range(T))
+        ax.set_xticklabels(tick_labels, fontsize=7)
+        ax.set_yticklabels(tick_labels, fontsize=7)
+        ax.set_xlabel('Step', fontsize=9)
+        ax.set_ylabel('Step', fontsize=9)
+
+    # shared colorbar for first two panels
+    plt.colorbar(im0, cax=cax, label='CKA')
+
+    # separate colorbar for diff panel (right side)
+    cbar2 = fig.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
+    cbar2.set_label('ΔCKA', fontsize=8)
+
+    fig.suptitle(f'Linear CKA Inter-Step Similarity: {z_label} Trajectories', 
+                 fontsize=13, y=1.02)
+
     fig.tight_layout()
     return fig

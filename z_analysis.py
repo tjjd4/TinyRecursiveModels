@@ -25,7 +25,7 @@ from omegaconf import DictConfig
 
 from puzzle_dataset_with_rating import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
 from utils.functions import load_model_class, get_model_source_path, load_checkpoint_from_path
-from utils.matplot_figures import _plot_pca_split, _plot_pca_combined, _plot_forward_residual, _plot_pca_variance, _plot_displacement_hist, _plot_init_to_final_split, _plot_pos_residual_heatmap_given, _plot_pos_residual_heatmap_empty, _plot_pos_residual_by_step, _plot_rating_distribution, _plot_residual_vs_rating, _plot_accuracy_vs_rating, _plot_residual_by_rating_colormap, _plot_recursion_residual, _plot_pred_stability, _plot_logit_lens_accuracy, _plot_disagreement, _plot_cosine_similarity
+from utils.matplot_figures import _plot_pca_split, _plot_pca_combined, _plot_forward_residual, _plot_pca_variance, _plot_displacement_hist, _plot_init_to_final_split, _plot_pos_residual_heatmap_given, _plot_pos_residual_heatmap_empty, _plot_pos_residual_by_step, _plot_rating_distribution, _plot_residual_vs_rating, _plot_accuracy_vs_rating, _plot_residual_by_rating_colormap, _plot_recursion_residual, _plot_pred_stability, _plot_logit_lens_accuracy, _plot_disagreement, _plot_cosine_similarity, _plot_cka_matrices
 
 from models.losses.loss_fn import IGNORE_LABEL_ID
 from models.recursive_reasoning.trm_trace import ZTrace
@@ -396,6 +396,10 @@ def run_z_analysis(
 
     wandb_log["z_analysis/disagreement"] = _save_wandb(_plot_disagreement(collector.step_empty_agree_correct, collector.step_empty_both_wrong_same, collector.step_empty_both_wrong_diff, collector.step_empty_only_z_H_correct, collector.step_empty_only_z_L_correct, collector.step_given_agree_correct, collector.step_given_both_wrong_same, collector.step_given_both_wrong_diff, collector.step_given_only_z_H_correct, collector.step_given_only_z_L_correct, collector.correct_flags, save_dir), save_dir, "disagreement.png")
     wandb_log["z_analysis/cosine_similarity"] = _save_wandb(_plot_cosine_similarity(collector.step_empty_cos_sim, collector.step_given_cos_sim, collector.correct_flags, save_dir), save_dir, "cosine_similarity.png")
+
+    # CKA matrices
+    wandb_log["z_analysis/cka_matrices"] = _save_wandb(_plot_cka_matrices(collector.trajectories, collector.correct_flags, save_dir, z_label="z_H"), save_dir, "cka_matrices.png")
+    wandb_log["z_analysis/cka_matrices_z_L"] = _save_wandb(_plot_cka_matrices(collector.z_L_trajectories, collector.correct_flags, save_dir, z_label="z_L"), save_dir, "cka_matrices_z_L.png")
 
     if collector.ratings:
         wandb_log["z_analysis/rating_distribution"] = _save_wandb(_plot_rating_distribution(collector.ratings, collector.correct_flags, save_dir), save_dir, "rating_distribution.png")
