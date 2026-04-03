@@ -44,13 +44,13 @@ class TinyRecursiveReasoningModel_ACTV1_Inner_Trace(TinyRecursiveReasoningModel_
                 for _L_step in range(self.config.L_cycles):
                     z_L = self.L_level(z_L, z_H + input_embeddings, **seq_info)
                     trace.record_z_L(z_L)
-                z_H = self.H_level(z_H, z_L + input_embeddings, **seq_info)
+                z_H = self.L_level(z_H, z_L + input_embeddings, **seq_info)
                 trace.record_z_H(z_H)
         # 1 with grad
         for _L_step in range(self.config.L_cycles):
             z_L = self.L_level(z_L, z_H + input_embeddings, **seq_info)
             trace.record_z_L(z_L)
-        z_H = self.H_level(z_H, z_L + input_embeddings, **seq_info)
+        z_H = self.L_level(z_H, z_L + input_embeddings, **seq_info)
         trace.record_z_H(z_H)
 
         # LM Outputs
