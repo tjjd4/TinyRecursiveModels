@@ -6,6 +6,8 @@ from typing import Dict, List, Optional, Tuple
 import torch
 import torch._dynamo
 
+from utils.math import logit_entropy
+
 
 @dataclass
 class ZTrace:
@@ -15,9 +17,6 @@ class ZTrace:
     halt_max_steps: int
     rec_max_correct: int
     rec_max_incorrect: int
-
-    _step_snapshots_H: List[torch.Tensor] = field(default_factory=list)
-    _step_snapshots_L: List[torch.Tensor] = field(default_factory=list)
 
     trajectories: List[np.ndarray] = field(default_factory=list)  # (T, D)
     z_L_trajectories: List[np.ndarray] = field(default_factory=list)  # (T, D)
@@ -63,6 +62,8 @@ class ZTrace:
         self._step_z_L = []
         self._step_preds = []
         self._step_z_L_preds = []
+        self._step_z_H_entropy = []
+        self._step_z_L_entropy = []
 
         # step level trajectories
         self.trajectories = []
@@ -110,6 +111,12 @@ class ZTrace:
         self.step_empty_cos_sim = []
         self.step_given_cos_sim = []
 
+        # entropy
+        self.step_z_H_empty_entropy = []
+        self.step_z_H_given_entropy = []
+        self.step_z_L_empty_entropy = []
+        self.step_z_L_given_entropy = []
+
         self._rec_n_correct = 0
         self._rec_n_incorrect = 0
         self.n_stored = 0
@@ -144,6 +151,10 @@ class ZTrace:
         self._step_preds.append(torch.argmax(output, dim=-1))
         self._step_z_L_preds.append(torch.argmax(z_L_logit_lens, dim=-1))
 
+        # logit lens entropy
+        self._step_z_H_entropy.append(logit_entropy(output))
+        self._step_z_L_entropy.append(logit_entropy(z_L_logit_lens))
+
 
     def clear_batch_buffers(self) -> None:
         """Call before each batch."""
@@ -153,6 +164,8 @@ class ZTrace:
         self._step_z_L.clear()
         self._step_preds.clear()
         self._step_z_L_preds.clear()
+        self._step_z_H_entropy.clear()
+        self._step_z_L_entropy.clear()
         # Update flag: should we collect recursion trace for the next batch?
         # Collect if we haven't reached the max for either correct or incorrect
         self.is_all_trace_collected = (
@@ -189,6 +202,8 @@ class ZTrace:
         step_z_L_np = torch.stack(self._step_z_L).cpu().float().numpy()  # (n_steps, B, L, D)
         step_preds_np = torch.stack(self._step_preds).cpu().numpy()  # (n_steps, B, seq_len, n_classes)
         step_z_L_preds_np = torch.stack(self._step_z_L_preds).cpu().numpy()  # (n_steps, B, seq_len, n_classes)
+        step_z_H_ent_np = torch.stack(self._step_z_H_entropy).cpu().float().numpy()  # (n_steps, B, seq_len)
+        step_z_L_ent_np = torch.stack(self._step_z_L_entropy).cpu().float().numpy()  # (n_steps, B, seq_len)
 
         # rec_z_H/L are called snapshots_per_step times per supervision step
         if self._rec_z_H:
@@ -263,9 +278,10 @@ class ZTrace:
             n_valid = cell_mask.sum()
             n_given = (given & cell_mask).sum()
             n_empty = empty.sum()
+            given_valid = given & cell_mask
 
             cell_acc = per_step_correct[:, cell_mask].sum(axis=1).astype(np.float32) / max(n_valid, 1)
-            given_acc = per_step_correct[:, given & cell_mask].sum(axis=1).astype(np.float32) / max(n_given, 1)
+            given_acc = per_step_correct[:, given_valid].sum(axis=1).astype(np.float32) / max(n_given, 1)
             empty_acc = per_step_correct[:, empty].sum(axis=1).astype(np.float32) / max(n_empty, 1)
 
             # prediction stability: start from the last step and go backwards, the earliest step that makes the prediction no longer change
@@ -283,8 +299,16 @@ class ZTrace:
             z_L_per_step_correct = (sample_z_L_preds == cell_labels[None, :]) & cell_mask[None, :]
 
             z_L_cell_acc = z_L_per_step_correct[:, cell_mask].sum(axis=1).astype(np.float32) / max(n_valid, 1)
-            z_L_given_acc = z_L_per_step_correct[:, given & cell_mask].sum(axis=1).astype(np.float32) / max(n_given, 1)
+            z_L_given_acc = z_L_per_step_correct[:, given_valid].sum(axis=1).astype(np.float32) / max(n_given, 1)
             z_L_empty_acc = z_L_per_step_correct[:, empty].sum(axis=1).astype(np.float32) / max(n_empty, 1)
+
+            # entropy
+            ent_H = step_z_H_ent_np[:T_actual, b, :]  # (T_actual, )
+            ent_L = step_z_L_ent_np[:T_actual, b, :]  # (T_actual, )
+            z_H_empty_entropy = ent_H[:, empty].mean(axis=1).astype(np.float32)         # (T_actual,)
+            z_H_given_entropy = ent_H[:, given_valid].mean(axis=1).astype(np.float32)
+            z_L_empty_entropy = ent_L[:, empty].mean(axis=1).astype(np.float32)
+            z_L_given_entropy = ent_L[:, given_valid].mean(axis=1).astype(np.float32)
 
             # z_H logit lens vs z_L logit lens
             both_correct = per_step_correct & z_L_per_step_correct          # (T, 81)
@@ -302,7 +326,6 @@ class ZTrace:
             empty_only_z_L_correct_rate = only_z_L_correct[:, empty].sum(axis=1).astype(np.float32) / n_e
 
             # per-step proportion of given cells
-            given_valid = given & cell_mask
             n_g = max(n_given, 1)
             given_agree_correct_rate = both_correct[:, given_valid].sum(axis=1).astype(np.float32) / n_g
             given_both_wrong_same_rate = both_wrong_same[:, given_valid].sum(axis=1).astype(np.float32) / n_g
@@ -358,6 +381,10 @@ class ZTrace:
             self.step_given_only_z_L_correct.append(given_only_z_L_correct_rate)
             self.step_empty_cos_sim.append(empty_cos_sim)
             self.step_given_cos_sim.append(given_cos_sim)
+            self.step_z_H_empty_entropy.append(z_H_empty_entropy)
+            self.step_z_H_given_entropy.append(z_H_given_entropy)
+            self.step_z_L_empty_entropy.append(z_L_empty_entropy)
+            self.step_z_L_given_entropy.append(z_L_given_entropy)
             self.n_stored += 1
 
             # recursion level
@@ -396,6 +423,23 @@ class ZTrace:
             "pos_residuals": len(self.pos_residuals),
             "step_cell_acc": len(self.step_cell_acc),
             "step_pred_stable": len(self.step_pred_stable),
+            "step_z_L_cell_acc": len(self.step_z_L_cell_acc),
+            "step_empty_agree_correct": len(self.step_empty_agree_correct),
+            "step_empty_both_wrong_same": len(self.step_empty_both_wrong_same),
+            "step_empty_both_wrong_diff": len(self.step_empty_both_wrong_diff),
+            "step_empty_only_z_H_correct": len(self.step_empty_only_z_H_correct),
+            "step_empty_only_z_L_correct": len(self.step_empty_only_z_L_correct),
+            "step_given_agree_correct": len(self.step_given_agree_correct),
+            "step_given_both_wrong_same": len(self.step_given_both_wrong_same),
+            "step_given_both_wrong_diff": len(self.step_given_both_wrong_diff),
+            "step_given_only_z_H_correct": len(self.step_given_only_z_H_correct),
+            "step_given_only_z_L_correct": len(self.step_given_only_z_L_correct),
+            "step_empty_cos_sim": len(self.step_empty_cos_sim),
+            "step_given_cos_sim": len(self.step_given_cos_sim),
+            "step_z_H_empty_entropy": len(self.step_z_H_empty_entropy),
+            "step_z_H_given_entropy": len(self.step_z_H_given_entropy),
+            "step_z_L_empty_entropy": len(self.step_z_L_empty_entropy),
+            "step_z_L_given_entropy": len(self.step_z_L_given_entropy),
         }
         ok = len(set(lens.values())) == 1
         print(f"\n[ZTrace] supervision step alignment: {'OK' if ok else 'FAILED'}")

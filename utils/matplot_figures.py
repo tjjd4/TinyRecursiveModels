@@ -1058,6 +1058,181 @@ def _plot_cka_matrices(all_z, correct_mask, save_dir: str, z_label: str = "z_H")
 
     fig.suptitle(f'Linear CKA Inter-Step Similarity: {z_label} Trajectories', 
                  fontsize=13, y=1.02)
+    return fig
+
+
+def _plot_violation_curve(step_preds_all: List[np.ndarray], correct_flags: List[bool], save_dir: str):
+    """
+    Per-step mean Sudoku violation count, 2 lines: correct vs incorrect.
+    step_preds_all: list of (T_actual, 81) int arrays, values 2–10
+    """
+    def _count_violations(pred_81):
+        board = pred_81.reshape(9, 9)
+        violations = 0
+        for i in range(9):
+            row = board[i, :]
+            col = board[:, i]
+            box = board[(i//3)*3:(i//3)*3+3, (i%3)*3:(i%3)*3+3].flatten()
+            for group in [row, col, box]:
+                vals = group[group >= 2]
+                violations += len(vals) - len(np.unique(vals))
+        return violations
+
+    violation_curves = [
+        np.array([_count_violations(preds[t]) for t in range(len(preds))])
+        for preds in step_preds_all
+    ]
+
+    max_T = max(len(c) for c in violation_curves)
+    correct_idx, incorrect_idx = _split_indices(correct_flags)
+    steps = np.arange(1, max_T + 1)
+
+    def _padded_stats(indices):
+        if not indices:
+            return np.full(max_T, np.nan), np.full(max_T, np.nan)
+        arrs = []
+        for i in indices:
+            a = violation_curves[i]
+            padded = np.pad(a.astype(float), (0, max_T - len(a)), constant_values=np.nan)
+            arrs.append(padded)
+        stacked = np.array(arrs)
+        return np.nanmean(stacked, axis=0), np.nanstd(stacked, axis=0)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    for idx, color, label in [
+        (correct_idx,   'green', 'Correct'),
+        (incorrect_idx, 'red',   'Incorrect'),
+    ]:
+        mean, std = _padded_stats(idx)
+        ax.plot(steps, mean, '-o', color=color, ms=4, label=label)
+        ax.fill_between(steps, mean - std, mean + std, color=color, alpha=0.15)
+
+    ax.set_xlabel('Supervision Step')
+    ax.set_ylabel('Mean Violation Count')
+    ax.set_xticks(steps)
+    ax.set_title('Per-step Sudoku Constraint Violations (z_H Predictions)')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+    return fig
+
+
+def _plot_difficulty_stratification(step_empty_acc: List[np.ndarray], given_masks: List[np.ndarray], correct_flags: List[bool], save_dir: str, n_bins: int = 4):
+    """
+    Stratify puzzles by given-cell count, plot per-step empty-cell accuracy.
+    Left: correct puzzles. Right: incorrect puzzles.
+    """
+    given_counts = np.array([g.sum() for g in given_masks])
+    correct_flags_arr = np.array(correct_flags)
+
+    fig, axes = plt.subplots(1, 2, figsize=(18, 6), sharey=True)
+
+    for ax, is_correct in zip(axes, [True, False]):
+        subset_idx = np.where(correct_flags_arr == is_correct)[0]
+        if len(subset_idx) == 0:
+            ax.set_visible(False)
+            continue
+
+        counts_subset = given_counts[subset_idx]
+        percentiles = np.linspace(0, 100, n_bins + 1)
+        bin_edges = np.unique(np.percentile(counts_subset, percentiles))
+
+        max_T = max(len(step_empty_acc[i]) for i in subset_idx)
+        steps = np.arange(1, max_T + 1)
+        cmap = plt.cm.Blues(np.linspace(0.4, 1.0, len(bin_edges) - 1))
+
+        for k in range(len(bin_edges) - 1):
+            lo, hi = bin_edges[k], bin_edges[k + 1]
+            last_bin = (k == len(bin_edges) - 2)
+            in_bin = subset_idx[
+                (counts_subset >= lo) & (counts_subset <= hi if last_bin else counts_subset < hi)
+            ]
+            if len(in_bin) == 0:
+                continue
+
+            arrs = []
+            for i in in_bin:
+                a = step_empty_acc[i]
+                padded = np.pad(a, (0, max_T - len(a)), constant_values=np.nan)
+                arrs.append(padded)
+            stacked = np.array(arrs)
+            mean = np.nanmean(stacked, axis=0)
+            std  = np.nanstd(stacked, axis=0)
+
+            label = f'Given {int(lo)}–{int(hi)} (n={len(in_bin)})'
+            ax.plot(steps, mean, '-o', color=cmap[k], ms=4, label=label)
+            ax.fill_between(steps, mean - std, mean + std, color=cmap[k], alpha=0.15)
+
+        title = 'Correct Puzzles' if is_correct else 'Incorrect Puzzles'
+        ax.set_title(f'Difficulty Stratification — {title}')
+        ax.set_xlabel('Supervision Step')
+        ax.set_ylabel('Mean Empty-cell Accuracy')
+        ax.set_xticks(steps)
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+    fig.suptitle('Empty-cell Accuracy by Given-cell Count', y=1.02)
+    fig.tight_layout()
+    return fig
+
+
+def _plot_logit_lens_entropy(
+    step_z_H_empty_entropy, step_z_H_given_entropy,
+    step_z_L_empty_entropy, step_z_L_given_entropy,
+    correct_flags, save_dir, max_entropy=None
+):
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    max_T = max(a.shape[0] for a in step_z_H_empty_entropy)
+    correct_idx, incorrect_idx = _split_indices(correct_flags)
+    steps = np.arange(1, max_T + 1)
+
+    # ln(9) ≈ 2.197 for 9-class uniform distribution
+    if max_entropy is None:
+        max_entropy = np.log(9)
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # ── Left: z_H entropy ──────────────────────────────────────
+    ax = axes[0]
+    ax.plot(steps, _padded_mean(correct_idx,   step_z_H_empty_entropy, max_T),
+            'g-o',  ms=4, label='Correct (empty)')
+    ax.plot(steps, _padded_mean(incorrect_idx, step_z_H_empty_entropy, max_T),
+            'r-o',  ms=4, label='Incorrect (empty)')
+    ax.plot(steps, _padded_mean(correct_idx,   step_z_H_given_entropy, max_T),
+            'g--s', ms=4, alpha=0.5, label='Correct (given)')
+    ax.plot(steps, _padded_mean(incorrect_idx, step_z_H_given_entropy, max_T),
+            'r--s', ms=4, alpha=0.5, label='Incorrect (given)')
+    ax.axhline(max_entropy, color='gray', ls=':', alpha=0.5, label=f'Max entropy (ln9={max_entropy:.2f})')
+    ax.set_xlabel('Supervision Step')
+    ax.set_ylabel('Mean Softmax Entropy (nats)')
+    ax.set_title('z_H Logit Lens — Softmax Entropy')
+    ax.set_xticks(steps)
+    ax.set_ylim(0, max_entropy * 1.15)
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.3)
+
+    # ── Right: z_L entropy ──────────────────────────────────────
+    ax = axes[1]
+    ax.plot(steps, _padded_mean(correct_idx,   step_z_L_empty_entropy, max_T),
+            'g-o',  ms=4, label='Correct (empty)')
+    ax.plot(steps, _padded_mean(incorrect_idx, step_z_L_empty_entropy, max_T),
+            'r-o',  ms=4, label='Incorrect (empty)')
+    ax.plot(steps, _padded_mean(correct_idx,   step_z_L_given_entropy, max_T),
+            'g--s', ms=4, alpha=0.5, label='Correct (given)')
+    ax.plot(steps, _padded_mean(incorrect_idx, step_z_L_given_entropy, max_T),
+            'r--s', ms=4, alpha=0.5, label='Incorrect (given)')
+    ax.axhline(max_entropy, color='gray', ls=':', alpha=0.5, label=f'Max entropy (ln9={max_entropy:.2f})')
+    ax.set_xlabel('Supervision Step')
+    ax.set_ylabel('Mean Softmax Entropy (nats)')
+    ax.set_title('z_L Logit Lens — Softmax Entropy')
+    ax.set_xticks(steps)
+    ax.set_ylim(0, max_entropy * 1.15)
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.3)
 
     fig.tight_layout()
     return fig

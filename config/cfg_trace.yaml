@@ -20,7 +20,7 @@ data_paths_test: []
 evaluators:
   - name: arc@ARC
 
-# Hyperparams - Training
+# Hyperparams
 global_batch_size: 128
 
 # Inference parameters

@@ -25,11 +25,10 @@ from omegaconf import DictConfig
 
 from puzzle_dataset_with_rating import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
 from utils.functions import load_model_class, get_model_source_path, load_checkpoint_from_path
-from utils.matplot_figures import _plot_pca_split, _plot_pca_combined, _plot_forward_residual, _plot_pca_variance, _plot_displacement_hist, _plot_init_to_final_split, _plot_pos_residual_heatmap_given, _plot_pos_residual_heatmap_empty, _plot_pos_residual_by_step, _plot_rating_distribution, _plot_residual_vs_rating, _plot_accuracy_vs_rating, _plot_residual_by_rating_colormap, _plot_recursion_residual, _plot_pred_stability, _plot_logit_lens_accuracy, _plot_disagreement, _plot_cosine_similarity, _plot_cka_matrices
+from utils.matplot_figures import _plot_pca_split, _plot_pca_combined, _plot_forward_residual, _plot_pca_variance, _plot_displacement_hist, _plot_init_to_final_split, _plot_pos_residual_heatmap_given, _plot_pos_residual_heatmap_empty, _plot_pos_residual_by_step, _plot_rating_distribution, _plot_residual_vs_rating, _plot_accuracy_vs_rating, _plot_residual_by_rating_colormap, _plot_recursion_residual, _plot_pred_stability, _plot_logit_lens_accuracy, _plot_disagreement, _plot_cosine_similarity, _plot_cka_matrices, _plot_violation_curve, _plot_difficulty_stratification, _plot_logit_lens_entropy
 
 from models.losses.loss_fn import IGNORE_LABEL_ID
-from models.recursive_reasoning.trm_trace import ZTrace
-
+from utils.z_trace import ZTrace
 
 class LossConfig(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra='allow')
@@ -270,6 +269,7 @@ def run_z_analysis(
     max_s = config.z_analysis_max_samples_pca
     trajs = collector.trajectories
     z_L_trajs = collector.z_L_trajectories
+    step_preds_all = collector.step_preds_all
     if min(len(trajs), len(z_L_trajs)) > max_s:
         rng = np.random.default_rng(0)
         idxs = rng.choice(min(len(trajs), len(z_L_trajs)), max_s, replace=False).tolist()
@@ -391,8 +391,11 @@ def run_z_analysis(
     wandb_log["z_analysis/z_L_pca_init_to_final"] = _save_wandb(_plot_init_to_final_split(proj_inits_L, proj_z_L, sample_ids, sub_flags, pca_L, save_dir, z_label="z_L"), save_dir, "z_L_pca_init_to_final.png")
 
     wandb_log["z_analysis/pred_stability_hist"] = _save_wandb(_plot_pred_stability(collector.step_pred_stable, collector.correct_flags, save_dir), save_dir, "pred_stability_hist.png")
+
+    # Logit lens
     wandb_log["z_analysis/z_H_logit_lens_accuracy"] = _save_wandb(_plot_logit_lens_accuracy(collector.step_cell_acc, collector.step_empty_acc, collector.step_given_acc, collector.correct_flags, save_dir, z_label="z_H"), save_dir, "logit_lens_accuracy.png")
     wandb_log["z_analysis/z_L_logit_lens_accuracy"] = _save_wandb(_plot_logit_lens_accuracy(collector.step_z_L_cell_acc, collector.step_z_L_empty_acc, collector.step_z_L_given_acc, collector.correct_flags, save_dir, z_label="z_L"), save_dir, "logit_lens_accuracy_z_L.png")
+    wandb_log["z_analysis/logit_lens_entropy"] = _save_wandb(_plot_logit_lens_entropy(collector.step_z_H_empty_entropy, collector.step_z_H_given_entropy, collector.step_z_L_empty_entropy, collector.step_z_L_given_entropy, collector.correct_flags, save_dir), save_dir, "logit_lens_entropy.png")
 
     wandb_log["z_analysis/disagreement"] = _save_wandb(_plot_disagreement(collector.step_empty_agree_correct, collector.step_empty_both_wrong_same, collector.step_empty_both_wrong_diff, collector.step_empty_only_z_H_correct, collector.step_empty_only_z_L_correct, collector.step_given_agree_correct, collector.step_given_both_wrong_same, collector.step_given_both_wrong_diff, collector.step_given_only_z_H_correct, collector.step_given_only_z_L_correct, collector.correct_flags, save_dir), save_dir, "disagreement.png")
     wandb_log["z_analysis/cosine_similarity"] = _save_wandb(_plot_cosine_similarity(collector.step_empty_cos_sim, collector.step_given_cos_sim, collector.correct_flags, save_dir), save_dir, "cosine_similarity.png")
@@ -401,6 +404,13 @@ def run_z_analysis(
     wandb_log["z_analysis/cka_matrices"] = _save_wandb(_plot_cka_matrices(collector.trajectories, collector.correct_flags, save_dir, z_label="z_H"), save_dir, "cka_matrices.png")
     wandb_log["z_analysis/cka_matrices_z_L"] = _save_wandb(_plot_cka_matrices(collector.z_L_trajectories, collector.correct_flags, save_dir, z_label="z_L"), save_dir, "cka_matrices_z_L.png")
 
+    # Violation curve
+    wandb_log["z_analysis/violation_curve"] = _save_wandb(_plot_violation_curve(collector.step_preds_all, collector.correct_flags, save_dir), save_dir, "violation_curve.png")
+
+    # Difficulty stratification
+    wandb_log["z_analysis/difficulty_stratification"] = _save_wandb(_plot_difficulty_stratification(collector.step_empty_acc, collector.given_masks, collector.correct_flags, save_dir), save_dir, "difficulty_stratification.png")
+
+    # Rating-based plots
     if collector.ratings:
         wandb_log["z_analysis/rating_distribution"] = _save_wandb(_plot_rating_distribution(collector.ratings, collector.correct_flags, save_dir), save_dir, "rating_distribution.png")
         wandb_log["z_analysis/residual_vs_rating"] = _save_wandb(_plot_residual_vs_rating(collector.residuals, collector.ratings, collector.correct_flags, save_dir), save_dir, "residual_vs_rating.png")
