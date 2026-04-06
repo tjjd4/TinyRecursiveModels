@@ -135,7 +135,10 @@ def load_model_from_checkpoint(config: TraceConfig, metadata: PuzzleDatasetMetad
         print(model)
         model = loss_head_cls(model, **config.eval_loss.__pydantic_extra__)  # type: ignore
         if "DISABLE_COMPILE" not in os.environ:
+            print("Compiling model")
             model = torch.compile(model)  # type: ignore
+        else:
+            print("Skipping torch.compile")
 
         # Load checkpoint
         if not os.path.exists(config.load_checkpoint):

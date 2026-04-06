@@ -1,0 +1,26 @@
+# config for splitting dataset into correct/incorrect puzzles
+
+defaults:
+  - arch: trm_trace
+  - _self_
+
+eval_loss:
+  name: losses.eval_loss@EvalLossHead
+
+hydra:
+  output_subdir: null
+
+# Model checkpoint path
+load_checkpoint: ""
+
+# Data path
+data_paths: ['data/arc-aug-1000']
+data_paths_test: []
+
+# Hyperparams
+global_batch_size: 768
+
+seed: 0
+
+# Output
+save_dir: "data/split"

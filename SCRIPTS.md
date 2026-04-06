@@ -17,6 +17,18 @@ load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t
 +run_name=${run_name}
 ```
 
+```bash
+run_name="eval_pretrain_mlp_t_sudoku_incorrect_44"
+python eval.py \
+arch=trm \
+data_paths="[data/split/sudoku-extreme-1k-aug-1000/incorrect]" \
+evaluators="[]" \
+arch.mlp_t=True arch.pos_encodings=none \
+arch.L_layers=2 arch.H_cycles=3 arch.L_cycles=6 \
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_44/step_65100" \
++run_name=${run_name}
+```
+
 ### Maze-Hard:
 
 ```bash
@@ -40,6 +52,33 @@ run_name="z_analysis_pretrain_mlp_t_sudoku"
 python z_analysis.py \
 arch=trm_trace \
 data_paths="[data/sudoku-extreme-1k-aug-1000]" \
+evaluators="[]" \
+arch.mlp_t=True arch.pos_encodings=none \
+arch.L_layers=2 \
+arch.H_cycles=3 arch.L_cycles=6 \
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_44/step_65100" \
++run_name=${run_name}
+```
+
+#### Data only correct or incorrect
+
+```bash
+run_name="z_analysis_pretrain_mlp_t_sudoku_correct"
+python z_analysis.py \
+arch=trm_trace \
+data_paths="[data/split/sudoku-extreme-1k-aug-1000/correct]" \
+evaluators="[]" \
+arch.mlp_t=True arch.pos_encodings=none \
+arch.L_layers=2 \
+arch.H_cycles=3 arch.L_cycles=6 \
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_44/step_65100" \
++run_name=${run_name}
+
+
+run_name="z_analysis_pretrain_mlp_t_sudoku_incorrect"
+python z_analysis.py \
+arch=trm_trace \
+data_paths="[data/split/sudoku-extreme-1k-aug-1000/incorrect]" \
 evaluators="[]" \
 arch.mlp_t=True arch.pos_encodings=none \
 arch.L_layers=2 \
@@ -74,6 +113,33 @@ evaluators="[]" \
 load_checkpoint="checkpoints/Sudoku/hrm-hf/checkpoint" \
 +run_name=${run_name}
 ```
+
+## Split Dataset correct and incorrect
+
+### Sudoku-Extreme:
+
+```bash
+python split_dataset.py \
+arch=trm \
+data_paths="[data/sudoku-extreme-1k-aug-1000]" \
+arch.mlp_t=True arch.pos_encodings=none \
+arch.L_layers=2 \
+arch.H_cycles=3 arch.L_cycles=6 \
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_44/step_65100"
+```
+
+#### With Rating
+
+```bash
+python split_dataset_with_rating.py \
+arch=trm \
+data_paths="[data/sudoku-extreme-1k-aug-1000]" \
+arch.mlp_t=True arch.pos_encodings=none \
+arch.L_layers=2 \
+arch.H_cycles=3 arch.L_cycles=6 \
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_44/step_65100"
+```
+
 
 ## TRM Pretrain Experiments
 
