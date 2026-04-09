@@ -987,24 +987,26 @@ def plot_cosine_similarity(empty_cos_sim, given_cos_sim, correct_flags: List[boo
     return fig
 
 
+def _compute_cka_matrix(Z):
+    """
+    Z: (N, T, D) — N puzzles, T steps, D hidden dim
+    Returns: (T, T) CKA matrix
+    """
+    T = Z.shape[1]
+    cka_mat = np.zeros((T, T))
+    for i in range(T):
+        for j in range(i, T):
+            val = linear_cka(Z[:, i, :], Z[:, j, :])
+            cka_mat[i, j] = val
+            cka_mat[j, i] = val
+    return cka_mat
+
+
 def plot_cka_matrices(all_z, correct_mask, save_dir: str, z_label: str = "z_H"):
     """
     all_z: (N, T, D) numpy array, mean-pooled over cell positions
     correct_mask: (N,) bool array
     """
-    def compute_cka_matrix(Z):
-        """
-        Z: (N, T, D) — N puzzles, T steps, D hidden dim
-        Returns: (T, T) CKA matrix
-        """
-        T = Z.shape[1]
-        cka_mat = np.zeros((T, T))
-        for i in range(T):
-            for j in range(i, T):
-                val = linear_cka(Z[:, i, :], Z[:, j, :])
-                cka_mat[i, j] = val
-                cka_mat[j, i] = val
-        return cka_mat
 
     all_z = np.array(all_z)           # (N, T, D)
     correct_mask = np.array(correct_mask, dtype=bool)  # (N,)
@@ -1013,9 +1015,9 @@ def plot_cka_matrices(all_z, correct_mask, save_dir: str, z_label: str = "z_H"):
     z_incorrect = all_z[~correct_mask]   # (N_i, T, D)
 
     print(f"Computing CKA for {z_correct.shape[0]} correct puzzles...")
-    cka_correct   = compute_cka_matrix(z_correct)
+    cka_correct   = _compute_cka_matrix(z_correct)
     print(f"Computing CKA for {z_incorrect.shape[0]} incorrect puzzles...")
-    cka_incorrect = compute_cka_matrix(z_incorrect)
+    cka_incorrect = _compute_cka_matrix(z_incorrect)
     diff_matrix   = cka_correct - cka_incorrect
 
     T = cka_correct.shape[0]
@@ -1060,6 +1062,68 @@ def plot_cka_matrices(all_z, correct_mask, save_dir: str, z_label: str = "z_H"):
     fig.suptitle(f'Linear CKA Inter-Step Similarity: {z_label} Trajectories', 
                  fontsize=13, y=1.02)
     return fig
+
+
+def plot_puzzle_emb_cka_matrices(all_z_puzzle_emb, correct_mask, save_dir: str, z_label: str = "z_H"):
+    """
+    all_z: (N, T, D) numpy array, mean-pooled over puzzle_emb positions
+    correct_mask: (N,) bool array
+    """
+    all_z_puzzle_emb = np.array(all_z_puzzle_emb)
+    correct_mask = np.array(correct_mask, dtype=bool)
+ 
+    z_correct   = all_z_puzzle_emb[correct_mask]
+    z_incorrect = all_z_puzzle_emb[~correct_mask]
+ 
+    print(f"Computing puzzle-emb CKA for {z_correct.shape[0]} correct puzzles...")
+    cka_correct   = _compute_cka_matrix(z_correct)
+    print(f"Computing puzzle-emb CKA for {z_incorrect.shape[0]} incorrect puzzles...")
+    cka_incorrect = _compute_cka_matrix(z_incorrect)
+    diff_matrix   = cka_correct - cka_incorrect
+ 
+    T = cka_correct.shape[0]
+    tick_labels = [str(i+1) for i in range(T)]
+ 
+    fig = plt.figure(figsize=(18, 5.5))
+    gs  = gridspec.GridSpec(1, 4, width_ratios=[1, 1, 1, 0.05], wspace=0.35)
+ 
+    ax0 = fig.add_subplot(gs[0])
+    ax1 = fig.add_subplot(gs[1])
+    ax2 = fig.add_subplot(gs[2])
+    cax = fig.add_subplot(gs[3])
+ 
+    im_kwargs = dict(vmin=0, vmax=1, cmap='magma', aspect='auto')
+    diff_max  = np.abs(diff_matrix).max()
+ 
+    im0 = ax0.imshow(cka_correct,   **im_kwargs)
+    im1 = ax1.imshow(cka_incorrect, **im_kwargs)
+    im2 = ax2.imshow(diff_matrix,   vmin=-diff_max, vmax=diff_max,
+                     cmap='RdBu_r', aspect='auto')
+ 
+    for ax, title in zip([ax0, ax1, ax2], [
+        f'{z_label} Puzzle Emb CKA — Correct (n={z_correct.shape[0]:,})',
+        f'{z_label} Puzzle Emb CKA — Incorrect (n={z_incorrect.shape[0]:,})',
+        'Difference (Correct − Incorrect)'
+    ]):
+        ax.set_title(title, fontsize=11)
+        ax.set_xticks(range(T))
+        ax.set_yticks(range(T))
+        ax.set_xticklabels(tick_labels, fontsize=7)
+        ax.set_yticklabels(tick_labels, fontsize=7)
+        ax.set_xlabel('Step', fontsize=9)
+        ax.set_ylabel('Step', fontsize=9)
+ 
+    plt.colorbar(im0, cax=cax, label='CKA')
+ 
+    cbar2 = fig.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
+    cbar2.set_label('ΔCKA', fontsize=8)
+ 
+    fig.suptitle(
+        f'[E2.5b] Linear CKA Inter-Step Similarity: {z_label} — Puzzle Embedding Tokens',
+        fontsize=13, y=1.02,
+    )
+    return fig
+
 
 def _padded_mean_std(indices, data_list, max_T):
     if len(indices) == 0:

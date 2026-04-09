@@ -71,6 +71,8 @@ class ZTrace:
         # step level trajectories
         self.trajectories = []
         self.z_L_trajectories = []
+        self.z_H_puzzle_emb_trajs = []
+        self.z_L_puzzle_emb_trajs = []
         self.correct_flags = []
         self.ratings = []
         self.given_masks = []
@@ -280,17 +282,22 @@ class ZTrace:
             z_H_cell = z_H_last[:, cell_start:cell_end, :]   # (T_actual, 81, D)
             z_L_cell = z_L_last[:, cell_start:cell_end, :]   # (T_actual, 81, D)
 
+            z_H_puzzle_emb = z_H_last[:, 0:cell_start, :]   # (T_actual, puzzle_emb_len, D)
+            z_L_puzzle_emb = z_L_last[:, 0:cell_start, :]   # (T_actual, puzzle_emb_len, D)
+
             # mean-pool over sequence positions → (T_actual, D)
-            z_H_traj = z_H_cell.mean(axis=1)
-            z_L_traj = z_L_cell.mean(axis=1)
+            z_H_cell_traj = z_H_cell.mean(axis=1)
+            z_L_cell_traj = z_L_cell.mean(axis=1)
+            z_H_puzzle_emb_traj = z_H_puzzle_emb.mean(axis=1)
+            z_L_puzzle_emb_traj = z_L_puzzle_emb.mean(axis=1)
 
             # given mask from first 81 cell tokens
             given = batch_inputs_np[b, :] != 1  # (81,)
 
             # step-wise residuals
             if T_actual > 1:
-                diffs = np.linalg.norm(np.diff(z_H_traj, axis=0), axis=-1)       # (T-1,)
-                z_L_diffs = np.linalg.norm(np.diff(z_L_traj, axis=0), axis=-1)       # (T-1,)
+                diffs = np.linalg.norm(np.diff(z_H_cell_traj, axis=0), axis=-1)       # (T-1,)
+                z_L_diffs = np.linalg.norm(np.diff(z_L_cell_traj, axis=0), axis=-1)       # (T-1,)
                 pos_diffs = (np.linalg.norm(np.diff(z_H_cell, axis=0), axis=-1) / math.sqrt(D)) # (T-1, L)
             else:
                 diffs = np.array([0.0])
@@ -411,8 +418,10 @@ class ZTrace:
                 for t in range(T_actual)
             ])
 
-            self.trajectories.append(z_H_traj)
-            self.z_L_trajectories.append(z_L_traj)
+            self.trajectories.append(z_H_cell_traj)
+            self.z_L_trajectories.append(z_L_cell_traj)
+            self.z_H_puzzle_emb_trajs.append(z_H_puzzle_emb_traj)
+            self.z_L_puzzle_emb_trajs.append(z_L_puzzle_emb_traj)
             self.correct_flags.append(is_correct)
             self.ratings.append(rating)
             self.given_masks.append(given)
