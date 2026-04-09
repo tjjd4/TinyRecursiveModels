@@ -1,8 +1,9 @@
-from typing import List, Optional
+from typing import List, Tuple, Optional
 import math
 import matplotlib.pyplot as plt
 import numpy as np
-import matplotlib.patches as mpatches
+from scipy import stats
+from matplotlib.patches import Patch
 from matplotlib.lines import Line2D
 import matplotlib.gridspec as gridspec
 
@@ -10,7 +11,7 @@ from utils.math import linear_cka
 
 # individual plot functions (each returns fig for wandb logging)
 
-def _plot_pca_split(proj, sample_ids, flags, pca, save_dir, n_show=60, z_label="z_H"):
+def plot_pca_split(proj, sample_ids, flags, pca, save_dir, n_show=60, z_label="z_H"):
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
     correct_local = [i for i, f in enumerate(flags) if f]
     incorrect_local = [i for i, f in enumerate(flags) if not f]
@@ -38,7 +39,7 @@ def _plot_pca_split(proj, sample_ids, flags, pca, save_dir, n_show=60, z_label="
     return fig
 
 
-def _plot_pca_combined(proj, sample_ids, flags, pca, proj_inits, save_dir, n_show=80, z_label="z_H"):
+def plot_pca_combined(proj, sample_ids, flags, pca, proj_inits, save_dir, n_show=80, z_label="z_H"):
     fig, ax = plt.subplots(figsize=(8, 7))
     for li, is_correct in enumerate(flags[:n_show]):
         color = "steelblue" if is_correct else "firebrick"
@@ -64,7 +65,7 @@ def _plot_pca_combined(proj, sample_ids, flags, pca, proj_inits, save_dir, n_sho
     return fig
 
 
-def _plot_forward_residual(residuals, flags, save_dir, z_label="z_H"):
+def plot_forward_residual(residuals, flags, save_dir, z_label="z_H"):
     max_T = max(r.shape[0] for r in residuals) if residuals else 0
     if max_T == 0:
         return None
@@ -103,7 +104,7 @@ def _plot_forward_residual(residuals, flags, save_dir, z_label="z_H"):
     return fig
 
 
-def _plot_pca_variance(pca, save_dir, z_label="z_H"):
+def plot_pca_variance(pca, save_dir, z_label="z_H"):
     n = len(pca.explained_variance_ratio_)
     fig, axes = plt.subplots(1, 2, figsize=(10, 4))
     axes[0].bar(range(1, n + 1), pca.explained_variance_ratio_ * 100, color="steelblue")
@@ -124,7 +125,7 @@ def _plot_pca_variance(pca, save_dir, z_label="z_H"):
     return fig
 
 
-def _plot_displacement_hist(trajs, flags, save_dir, z_label="z_H"):
+def plot_displacement_hist(trajs, flags, save_dir, z_label="z_H"):
     correct_disp, incorrect_disp = [], []
     for traj, is_correct in zip(trajs, flags):
         if traj.shape[0] > 1:
@@ -151,7 +152,7 @@ def _plot_displacement_hist(trajs, flags, save_dir, z_label="z_H"):
     return fig
 
 
-def _plot_step1_vs_final(proj, sample_ids, flags, save_dir, z_label="z_H"):
+def plot_step1_vs_final(proj, sample_ids, flags, save_dir, z_label="z_H"):
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
     for ax, is_c, color, title in [
         (axes[0], True,  "steelblue", "Correct"),
@@ -181,7 +182,7 @@ def _plot_step1_vs_final(proj, sample_ids, flags, save_dir, z_label="z_H"):
     return fig
 
 
-def _plot_init_to_final_split(proj_inits, proj, sample_ids, flags, pca, save_dir, n_show=60, z_label="z_H"):
+def plot_init_to_final_split(proj_inits, proj, sample_ids, flags, pca, save_dir, n_show=60, z_label="z_H"):
     """
     proj_inits  : (n_samples, 2)  — H_init projected position
     proj        : (N_total_steps, 2)
@@ -255,7 +256,7 @@ def _plot_init_to_final_split(proj_inits, proj, sample_ids, flags, pca, save_dir
     return fig
 
 
-def _plot_hinit_vs_final(proj_inits, proj, sample_ids, flags, save_dir, z_label="z_H"):
+def plot_hinit_vs_final(proj_inits, proj, sample_ids, flags, save_dir, z_label="z_H"):
     """Init reset position (×) vs final step (★) for correct/incorrect."""
     init_name = "H_init" if z_label == "z_H" else "L_init"
     fig, ax = plt.subplots(figsize=(8, 7))
@@ -293,7 +294,7 @@ def _plot_hinit_vs_final(proj_inits, proj, sample_ids, flags, save_dir, z_label=
     return fig
 
 
-def _plot_pos_residual_heatmap_role(
+def plot_pos_residual_heatmap_role(
     pos_residuals: List[np.ndarray],   # per-puzzle (T-1, L_full)
     given_masks: List[np.ndarray],     # per-puzzle (81,) bool
     flags: List[bool],
@@ -378,15 +379,15 @@ def _plot_pos_residual_heatmap_role(
     return fig
 
 
-def _plot_pos_residual_heatmap_given(pos_residuals, given_masks, flags, puzzle_emb_len):
-    return _plot_pos_residual_heatmap_role(pos_residuals, given_masks, flags, role="given", puzzle_emb_len=puzzle_emb_len)
+def plot_pos_residual_heatmap_given(pos_residuals, given_masks, flags, puzzle_emb_len):
+    return plot_pos_residual_heatmap_role(pos_residuals, given_masks, flags, role="given", puzzle_emb_len=puzzle_emb_len)
 
 
-def _plot_pos_residual_heatmap_empty(pos_residuals, given_masks, flags, puzzle_emb_len):
-    return _plot_pos_residual_heatmap_role(pos_residuals, given_masks, flags, role="empty", puzzle_emb_len=puzzle_emb_len)
+def plot_pos_residual_heatmap_empty(pos_residuals, given_masks, flags, puzzle_emb_len):
+    return plot_pos_residual_heatmap_role(pos_residuals, given_masks, flags, role="empty", puzzle_emb_len=puzzle_emb_len)
 
 
-def _plot_pos_residual_by_step(
+def plot_pos_residual_by_step(
     pos_residuals: List[np.ndarray],
     given_masks: List[np.ndarray],
     flags: List[bool],
@@ -452,7 +453,7 @@ def _plot_pos_residual_by_step(
     return fig
 
 
-def _plot_rating_distribution(ratings, flags, save_dir):
+def plot_rating_distribution(ratings, flags, save_dir):
     ratings_arr = np.array(ratings, dtype=float)
     flags_arr   = np.array(flags)
     
@@ -510,7 +511,7 @@ def _plot_rating_distribution(ratings, flags, save_dir):
     return fig
 
 
-def _plot_residual_vs_rating(residuals, ratings, flags, save_dir, z_label="z_H"):
+def plot_residual_vs_rating(residuals, ratings, flags, save_dir, z_label="z_H"):
     if not ratings:
         return None
     
@@ -549,7 +550,7 @@ def _plot_residual_vs_rating(residuals, ratings, flags, save_dir, z_label="z_H")
     return fig
 
 
-def _plot_accuracy_vs_rating(flags, ratings, save_dir, n_bins=20):
+def plot_accuracy_vs_rating(flags, ratings, save_dir, n_bins=20):
     if not ratings:
         return None
     
@@ -599,7 +600,7 @@ def _plot_accuracy_vs_rating(flags, ratings, save_dir, n_bins=20):
     return fig
 
 
-def _plot_residual_by_rating_colormap(residuals, ratings, flags, save_dir, z_label="z_H", n_show=200):
+def plot_residual_by_rating_colormap(residuals, ratings, flags, save_dir, z_label="z_H", n_show=200):
     if not ratings:
         return None
     
@@ -641,7 +642,7 @@ def _plot_residual_by_rating_colormap(residuals, ratings, flags, save_dir, z_lab
     return fig
 
 
-def _plot_recursion_residual(
+def plot_recursion_residual(
     rec_z_H: List[np.ndarray],          # list of (T, H_cycles,         L, D)
     rec_z_L: List[np.ndarray],          # list of (T, H_cycles*L_cycles, L, D)
     rec_correct_flags: List[bool],
@@ -794,7 +795,7 @@ def _plot_recursion_residual(
     return fig
 
 
-def _plot_pred_stability(step_pred_stable, correct_flags: List[bool], save_dir: str):
+def plot_pred_stability(step_pred_stable, correct_flags: List[bool], save_dir: str):
     """Histogram of 'stable match' step, split by correct/incorrect."""
     fig, ax = plt.subplots(figsize=(8, 5))
     
@@ -821,7 +822,7 @@ def _plot_pred_stability(step_pred_stable, correct_flags: List[bool], save_dir: 
     return fig
 
 def _padded_mean(indices, acc_list, max_T):
-    if not indices:
+    if len(indices) == 0:
         return np.full(max_T, np.nan)
     arrs = []
     for i in indices:
@@ -837,7 +838,7 @@ def _split_indices(correct_flags):
     return correct_idx, incorrect_idx
 
 
-def _plot_logit_lens_accuracy(step_cell_acc, step_empty_acc, step_given_acc, correct_flags: List[bool], save_dir: str, z_label: str = "z_H"):
+def plot_logit_lens_accuracy(step_cell_acc, step_empty_acc, step_given_acc, correct_flags: List[bool], save_dir: str, z_label: str = "z_H"):
     """
     Per-step cell accuracy, split by correct/incorrect and given/empty.
     Works for both z_H and z_L by changing channel_name.
@@ -883,7 +884,7 @@ def _plot_logit_lens_accuracy(step_cell_acc, step_empty_acc, step_given_acc, cor
     fig.tight_layout()
     return fig
 
-def _plot_disagreement(
+def plot_disagreement(
     empty_both_correct, empty_both_wrong_same, empty_both_wrong_diff,
     empty_only_z_H_correct, empty_only_z_L_correct,
     given_both_correct, given_both_wrong_same, given_both_wrong_diff,
@@ -938,7 +939,7 @@ def _plot_disagreement(
     fig.tight_layout()
     return fig
 
-def _plot_cosine_similarity(empty_cos_sim, given_cos_sim, correct_flags: List[bool], save_dir: str):
+def plot_cosine_similarity(empty_cos_sim, given_cos_sim, correct_flags: List[bool], save_dir: str):
     def _padded_stats(indices, data_list, max_T):
         if not indices:
             return np.full(max_T, np.nan), np.full(max_T, np.nan)
@@ -986,7 +987,7 @@ def _plot_cosine_similarity(empty_cos_sim, given_cos_sim, correct_flags: List[bo
     return fig
 
 
-def _plot_cka_matrices(all_z, correct_mask, save_dir: str, z_label: str = "z_H"):
+def plot_cka_matrices(all_z, correct_mask, save_dir: str, z_label: str = "z_H"):
     """
     all_z: (N, T, D) numpy array, mean-pooled over cell positions
     correct_mask: (N,) bool array
@@ -1060,12 +1061,40 @@ def _plot_cka_matrices(all_z, correct_mask, save_dir: str, z_label: str = "z_H")
                  fontsize=13, y=1.02)
     return fig
 
+def _padded_mean_std(indices, data_list, max_T):
+    if len(indices) == 0:
+        nan = np.full(max_T, np.nan)
+        return nan, nan
+    arrs = np.array([
+        np.pad(data_list[i].astype(float), (0, max_T - len(data_list[i])),
+               constant_values=np.nan)
+        for i in indices
+    ])
+    return np.nanmean(arrs, axis=0), np.nanstd(arrs, axis=0)
 
-def _plot_violation_curve(step_preds_all: List[np.ndarray], correct_flags: List[bool], save_dir: str):
-    """
-    Per-step mean Sudoku violation count, 2 lines: correct vs incorrect.
-    step_preds_all: list of (T_actual, 81) int arrays, values 2–10
-    """
+
+def _get_bin_edges(values: np.ndarray, n_bins: int) -> np.ndarray:
+    percentiles = np.linspace(0, 100, n_bins + 1)
+    return np.unique(np.percentile(values, percentiles))
+
+
+def _bin_group_indices(
+    values: np.ndarray,
+    edges: np.ndarray,
+    group_idx: np.ndarray,
+) -> List[Tuple[int, int, np.ndarray]]:
+    result = []
+    n_bins = len(edges) - 1
+    for k in range(n_bins):
+        lo, hi = edges[k], edges[k + 1]
+        last_bin = (k == n_bins - 1)
+        in_range = (values >= lo) & (values <= hi if last_bin else values < hi)
+        bin_idx = group_idx[in_range[group_idx]]
+        result.append((int(lo), int(hi), bin_idx))
+    return result
+
+
+def plot_violation_curve(step_preds_all: List[np.ndarray], given_masks: List[np.ndarray], ratings: List[float], correct_flags: List[bool], save_dir: str, n_bins: int = 4):
     def _count_violations(pred_81):
         board = pred_81.reshape(9, 9)
         violations = 0
@@ -1082,109 +1111,96 @@ def _plot_violation_curve(step_preds_all: List[np.ndarray], correct_flags: List[
         np.array([_count_violations(preds[t]) for t in range(len(preds))])
         for preds in step_preds_all
     ]
-
     max_T = max(len(c) for c in violation_curves)
-    correct_idx, incorrect_idx = _split_indices(correct_flags)
     steps = np.arange(1, max_T + 1)
-
-    def _padded_stats(indices):
-        if not indices:
-            return np.full(max_T, np.nan), np.full(max_T, np.nan)
-        arrs = []
-        for i in indices:
-            a = violation_curves[i]
-            padded = np.pad(a.astype(float), (0, max_T - len(a)), constant_values=np.nan)
-            arrs.append(padded)
-        stacked = np.array(arrs)
-        return np.nanmean(stacked, axis=0), np.nanstd(stacked, axis=0)
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-
-    for idx, color, label in [
-        (correct_idx,   'green', 'Correct'),
-        (incorrect_idx, 'red',   'Incorrect'),
-    ]:
-        mean, std = _padded_stats(idx)
-        ax.plot(steps, mean, '-o', color=color, ms=4, label=label)
-        ax.fill_between(steps, mean - std, mean + std, color=color, alpha=0.15)
-
-    ax.set_xlabel('Supervision Step')
-    ax.set_ylabel('Mean Violation Count')
-    ax.set_xticks(steps)
-    ax.set_title('Per-step Sudoku Constraint Violations (z_H Predictions)')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-
-    fig.tight_layout()
-    return fig
-
-
-def _plot_difficulty_stratification(step_empty_acc: List[np.ndarray], given_masks: List[np.ndarray], correct_flags: List[bool], save_dir: str, n_bins: int = 4):
-    """
-    Stratify puzzles by given-cell count, plot per-step empty-cell accuracy.
-    Left: correct puzzles. Right: incorrect puzzles.
-    """
+    ratings_arr = np.array(ratings, dtype=float)
     given_counts = np.array([g.sum() for g in given_masks])
     correct_flags_arr = np.array(correct_flags)
+    correct_idx = np.where(correct_flags_arr)[0]
+    incorrect_idx = np.where(~correct_flags_arr)[0]
 
-    fig, axes = plt.subplots(1, 2, figsize=(18, 6), sharey=True)
+    rating_edges = _get_bin_edges(ratings_arr, n_bins)
+    given_edges = _get_bin_edges(given_counts, n_bins)
 
-    for ax, is_correct in zip(axes, [True, False]):
-        subset_idx = np.where(correct_flags_arr == is_correct)[0]
-        if len(subset_idx) == 0:
-            ax.set_visible(False)
-            continue
+    fig, axes = plt.subplots(1, 2, figsize=(18, 6))
+    subplot_cfgs = [
+        (axes[0], ratings_arr, rating_edges, 'Puzzle Rating (tdoku backtracks)'),
+        (axes[1], given_counts, given_edges, 'Given-cell Count'),
+    ]
 
-        counts_subset = given_counts[subset_idx]
-        percentiles = np.linspace(0, 100, n_bins + 1)
-        bin_edges = np.unique(np.percentile(counts_subset, percentiles))
+    for ax, values, edges, xlabel in subplot_cfgs:
+        n_valid_bins = len(edges) - 1
+        correct_colors = plt.cm.Blues(np.linspace(0.45, 0.95, n_valid_bins))
+        incorrect_colors = plt.cm.Reds(np.linspace(0.45, 0.95, n_valid_bins))
 
-        max_T = max(len(step_empty_acc[i]) for i in subset_idx)
-        steps = np.arange(1, max_T + 1)
-        cmap = plt.cm.Blues(np.linspace(0.4, 1.0, len(bin_edges) - 1))
+        for k, (lo, hi, c_idx) in enumerate(_bin_group_indices(values, edges, correct_idx)):
+            mean, std = _padded_mean_std(c_idx, violation_curves, max_T)
+            ax.plot(steps, mean, '-o', color=correct_colors[k], ms=4, label=f'Correct {lo}–{hi} (n={len(c_idx)})')
+            ax.fill_between(steps, mean - std, mean + std, color=correct_colors[k], alpha=0.12)
 
-        for k in range(len(bin_edges) - 1):
-            lo, hi = bin_edges[k], bin_edges[k + 1]
-            last_bin = (k == len(bin_edges) - 2)
-            in_bin = subset_idx[
-                (counts_subset >= lo) & (counts_subset <= hi if last_bin else counts_subset < hi)
-            ]
-            if len(in_bin) == 0:
-                continue
+        for k, (lo, hi, ic_idx) in enumerate(_bin_group_indices(values, edges, incorrect_idx)):
+            mean, std = _padded_mean_std(ic_idx, violation_curves, max_T)
+            ax.plot(steps, mean, '--o', color=incorrect_colors[k], ms=4, label=f'Incorrect {lo}–{hi} (n={len(ic_idx)})')
+            ax.fill_between(steps, mean - std, mean + std, color=incorrect_colors[k], alpha=0.12)
 
-            arrs = []
-            for i in in_bin:
-                a = step_empty_acc[i]
-                padded = np.pad(a, (0, max_T - len(a)), constant_values=np.nan)
-                arrs.append(padded)
-            stacked = np.array(arrs)
-            mean = np.nanmean(stacked, axis=0)
-            std  = np.nanstd(stacked, axis=0)
-
-            label = f'Given {int(lo)}–{int(hi)} (n={len(in_bin)})'
-            ax.plot(steps, mean, '-o', color=cmap[k], ms=4, label=label)
-            ax.fill_between(steps, mean - std, mean + std, color=cmap[k], alpha=0.15)
-
-        title = 'Correct Puzzles' if is_correct else 'Incorrect Puzzles'
-        ax.set_title(f'Difficulty Stratification — {title}')
-        ax.set_xlabel('Supervision Step')
-        ax.set_ylabel('Mean Empty-cell Accuracy')
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel('Mean Violation Count')
         ax.set_xticks(steps)
-        ax.legend()
+        ax.set_title(f'Violation Curve — Stratified by {xlabel}')
+        ax.legend(fontsize=7, ncol=2)
         ax.grid(True, alpha=0.3)
 
-    fig.suptitle('Empty-cell Accuracy by Given-cell Count', y=1.02)
+    fig.suptitle('Per-step Sudoku Constraint Violations')
     fig.tight_layout()
     return fig
 
 
-def _plot_logit_lens_entropy(
-    step_z_H_empty_entropy, step_z_H_given_entropy,
-    step_z_L_empty_entropy, step_z_L_given_entropy,
-    correct_flags, save_dir, max_entropy=None
-):
-    import numpy as np
-    import matplotlib.pyplot as plt
+def plot_difficulty_stratification(step_empty_acc: List[np.ndarray], given_masks: List[np.ndarray], ratings: List[float], correct_flags: List[bool], save_dir: str, n_bins: int = 4):
+    ratings_arr = np.array(ratings, dtype=float)
+    given_counts = np.array([g.sum() for g in given_masks])
+    correct_flags_arr = np.array(correct_flags)
+    correct_idx = np.where(correct_flags_arr)[0]
+    incorrect_idx = np.where(~correct_flags_arr)[0]
+    max_T = max(len(a) for a in step_empty_acc)
+    steps = np.arange(1, max_T + 1)
+
+    rating_edges = _get_bin_edges(ratings_arr, n_bins)
+    given_edges = _get_bin_edges(given_counts, n_bins)
+
+    fig, axes = plt.subplots(1, 2, figsize=(18, 6))
+    subplot_cfgs = [
+        (axes[0], ratings_arr,  rating_edges, 'Puzzle Rating (tdoku backtracks)'),
+        (axes[1], given_counts, given_edges,  'Given-cell Count'),
+    ]
+
+    for ax, values, edges, xlabel in subplot_cfgs:
+        n_valid_bins = len(edges) - 1
+        correct_colors = plt.cm.Blues(np.linspace(0.45, 0.95, n_valid_bins))
+        incorrect_colors = plt.cm.Reds(np.linspace(0.45, 0.95, n_valid_bins))
+
+        for k, (lo, hi, c_idx) in enumerate(_bin_group_indices(values, edges, correct_idx)):
+            mean, std = _padded_mean_std(c_idx, step_empty_acc, max_T)
+            ax.plot(steps, mean, '-o', color=correct_colors[k], ms=4, label=f'Correct {lo}–{hi} (n={len(c_idx)})')
+            ax.fill_between(steps, mean - std, mean + std, color=correct_colors[k], alpha=0.12)
+
+        for k, (lo, hi, ic_idx) in enumerate(_bin_group_indices(values, edges, incorrect_idx)):
+            mean, std = _padded_mean_std(ic_idx, step_empty_acc, max_T)
+            ax.plot(steps, mean, '--o', color=incorrect_colors[k], ms=4, label=f'Incorrect {lo}–{hi} (n={len(ic_idx)})')
+            ax.fill_between(steps, mean - std, mean + std, color=incorrect_colors[k], alpha=0.12)
+
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel('Mean Empty-cell Accuracy')
+        ax.set_xticks(steps)
+        ax.set_title(f'Accuracy — Stratified by {xlabel}')
+        ax.legend(fontsize=7, ncol=2)
+        ax.grid(True, alpha=0.3)
+
+    fig.suptitle('Difficulty Stratification\nEmpty-cell Accuracy by Difficulty — Rating vs Given-cell Count')
+    fig.tight_layout()
+    return fig
+
+
+def plot_logit_lens_entropy(step_z_H_empty_entropy, step_z_H_given_entropy, step_z_L_empty_entropy, step_z_L_given_entropy, correct_flags, save_dir, max_entropy=None):
 
     max_T = max(a.shape[0] for a in step_z_H_empty_entropy)
     correct_idx, incorrect_idx = _split_indices(correct_flags)
@@ -1196,16 +1212,11 @@ def _plot_logit_lens_entropy(
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
-    # ── Left: z_H entropy ──────────────────────────────────────
     ax = axes[0]
-    ax.plot(steps, _padded_mean(correct_idx,   step_z_H_empty_entropy, max_T),
-            'g-o',  ms=4, label='Correct (empty)')
-    ax.plot(steps, _padded_mean(incorrect_idx, step_z_H_empty_entropy, max_T),
-            'r-o',  ms=4, label='Incorrect (empty)')
-    ax.plot(steps, _padded_mean(correct_idx,   step_z_H_given_entropy, max_T),
-            'g--s', ms=4, alpha=0.5, label='Correct (given)')
-    ax.plot(steps, _padded_mean(incorrect_idx, step_z_H_given_entropy, max_T),
-            'r--s', ms=4, alpha=0.5, label='Incorrect (given)')
+    ax.plot(steps, _padded_mean(correct_idx,   step_z_H_empty_entropy, max_T), 'g-o',  ms=4, label='Correct (empty)')
+    ax.plot(steps, _padded_mean(incorrect_idx, step_z_H_empty_entropy, max_T), 'r-o',  ms=4, label='Incorrect (empty)')
+    ax.plot(steps, _padded_mean(correct_idx,   step_z_H_given_entropy, max_T), 'g--s', ms=4, alpha=0.5, label='Correct (given)')
+    ax.plot(steps, _padded_mean(incorrect_idx, step_z_H_given_entropy, max_T), 'r--s', ms=4, alpha=0.5, label='Incorrect (given)')
     ax.axhline(max_entropy, color='gray', ls=':', alpha=0.5, label=f'Max entropy (ln9={max_entropy:.2f})')
     ax.set_xlabel('Supervision Step')
     ax.set_ylabel('Mean Softmax Entropy (nats)')
@@ -1215,16 +1226,11 @@ def _plot_logit_lens_entropy(
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
 
-    # ── Right: z_L entropy ──────────────────────────────────────
     ax = axes[1]
-    ax.plot(steps, _padded_mean(correct_idx,   step_z_L_empty_entropy, max_T),
-            'g-o',  ms=4, label='Correct (empty)')
-    ax.plot(steps, _padded_mean(incorrect_idx, step_z_L_empty_entropy, max_T),
-            'r-o',  ms=4, label='Incorrect (empty)')
-    ax.plot(steps, _padded_mean(correct_idx,   step_z_L_given_entropy, max_T),
-            'g--s', ms=4, alpha=0.5, label='Correct (given)')
-    ax.plot(steps, _padded_mean(incorrect_idx, step_z_L_given_entropy, max_T),
-            'r--s', ms=4, alpha=0.5, label='Incorrect (given)')
+    ax.plot(steps, _padded_mean(correct_idx,   step_z_L_empty_entropy, max_T), 'g-o',  ms=4, label='Correct (empty)')
+    ax.plot(steps, _padded_mean(incorrect_idx, step_z_L_empty_entropy, max_T), 'r-o',  ms=4, label='Incorrect (empty)')
+    ax.plot(steps, _padded_mean(correct_idx,   step_z_L_given_entropy, max_T), 'g--s', ms=4, alpha=0.5, label='Correct (given)')
+    ax.plot(steps, _padded_mean(incorrect_idx, step_z_L_given_entropy, max_T), 'r--s', ms=4, alpha=0.5, label='Incorrect (given)')
     ax.axhline(max_entropy, color='gray', ls=':', alpha=0.5, label=f'Max entropy (ln9={max_entropy:.2f})')
     ax.set_xlabel('Supervision Step')
     ax.set_ylabel('Mean Softmax Entropy (nats)')
@@ -1234,5 +1240,669 @@ def _plot_logit_lens_entropy(
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
 
+    fig.tight_layout()
+    return fig
+
+
+def _get_errors(idx_list, t, source, n_cells):
+    errors = []
+    for i in idx_list:
+        T_i = source[i].shape[0]
+        t_use = min(t, T_i - 1)
+        err = n_cells[i] - int(source[i][t_use])
+        errors.append(err)
+    return np.array(errors)
+
+def _get_error_rates(idx_list, t, source, n_cells):
+    rates = []
+    for i in idx_list:
+        T_i = source[i].shape[0]
+        t_use = min(t, T_i - 1)
+        err = n_cells[i] - int(source[i][t_use])
+        rates.append(err / n_cells[i] if n_cells[i] > 0 else 0.0)
+    return np.array(rates)
+
+
+def plot_severity(
+    step_empty_correct_count, step_given_correct_count,
+    n_empty, n_given, correct_flags: List[bool], save_dir: str
+):
+    def _plot_error_hist(ax, errors, color, title, xlabel, show_zero=False):
+        max_bin = max(int(errors.max()) + 2, 3)
+        ax.hist(errors, bins=range(0, max_bin),
+                color=color, edgecolor='black', alpha=0.8)
+        if show_zero:
+            n_zero = int((errors == 0).sum())
+            ax.set_title(f'{title}\nmean={np.mean(errors):.2f}, '
+                        f'zero-error={n_zero}/{len(errors)}')
+        else:
+            ax.axvline(np.mean(errors), color='red', ls='--', lw=1.5,
+                    label=f'mean={np.mean(errors):.1f}')
+            ax.axvline(np.median(errors), color='blue', ls='--', lw=1.5,
+                    label=f'median={np.median(errors):.0f}')
+            ax.set_title(f'{title}\nmean={np.mean(errors):.1f}, '
+                        f'median={np.median(errors):.0f}')
+            ax.legend(fontsize=7)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel('Number of puzzles')
+        ax.grid(True, alpha=0.3)
+
+    correct_idx, incorrect_idx = _split_indices(correct_flags)
+    highlight_steps = [0, 7, 15]
+    step_labels = ['Step 1', 'Step 8', 'Step 16']
+
+    fig, axes = plt.subplots(4, 3, figsize=(18, 22))
+
+    row_configs = [
+        # (idx,        source,                   n_cells,  color,           cell_type,    group,     show_zero)
+        (incorrect_idx, step_empty_correct_count, n_empty,  'salmon',        'Empty cell', 'Incorrect', False),
+        (incorrect_idx, step_given_correct_count, n_given,  'lightskyblue',  'Given cell', 'Incorrect', True),
+        (correct_idx,   step_empty_correct_count, n_empty,  'mediumseagreen','Empty cell', 'Correct',   False),
+        (correct_idx,   step_given_correct_count, n_given,  'lightgreen',    'Given cell', 'Correct',   True),
+    ]
+
+    for row, (idx, source, n_cells, color, cell_type, group, show_zero) in enumerate(row_configs):
+        for col, (t, slabel) in enumerate(zip(highlight_steps, step_labels)):
+            ax = axes[row, col]
+            errors = _get_errors(idx, t, source, n_cells)
+            _plot_error_hist(
+                ax, errors, color,
+                title=f'{group} — {slabel}',
+                xlabel=f'{cell_type} error count',
+                show_zero=show_zero
+            )
+
+    # Row labels
+    row_titles = [
+        'Incorrect: Empty cell errors\n(Near-miss vs Catastrophic failure?)',
+        'Incorrect: Given cell errors\n(Constraint anchoring intact?)',
+        'Correct: Empty cell errors\n(Convergence speed across steps?)',
+        'Correct: Given cell errors\n(Constraint anchoring in correct trajectories?)',
+    ]
+    for row, title in enumerate(row_titles):
+        axes[row, 0].set_ylabel(f'{title}\n\nNumber of puzzles', fontsize=8)
+
+    fig.suptitle('E2.6a Fig1: Error Severity & Constraint Anchoring\n'
+                 'Correct vs Incorrect × Empty vs Given cells',
+                 fontsize=13, fontweight='bold')
+    fig.tight_layout()
+    return fig
+
+
+def plot_recursion_effect(
+    step_empty_correct_count, n_empty,
+    correct_flags: List[bool], save_dir: str
+):
+    correct_idx, incorrect_idx = _split_indices(correct_flags)
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+
+    for ax, idx_list, label, color in [
+        (axes[0], incorrect_idx, 'Incorrect', 'salmon'),
+        (axes[1], correct_idx,   'Correct',   'mediumseagreen'),
+    ]:
+        e1  = _get_errors(idx_list, 0,  step_empty_correct_count, n_empty)
+        e16 = _get_errors(idx_list, 15, step_empty_correct_count, n_empty)
+        ax.scatter(e1, e16, alpha=0.25, s=6, color=color, rasterized=True)
+        lim = max(e1.max(), e16.max()) + 1
+        ax.plot([0, lim], [0, lim], 'k--', lw=1, alpha=0.5, label='y = x (no change)')
+        pct_imp   = (e16 < e1).mean() * 100
+        pct_worse = (e16 > e1).mean() * 100
+        pct_same  = (e16 == e1).mean() * 100
+        ax.set_xlabel('Empty cell error count — Step 1')
+        ax.set_ylabel('Empty cell error count — Step 16')
+        ax.set_title(f'{label}: Step 1 vs Step 16\n'
+                     f'improved={pct_imp:.1f}%  same={pct_same:.1f}%  worse={pct_worse:.1f}%')
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+    # Delta histogram overlay
+    ax = axes[2]
+    e1_inc  = _get_errors(incorrect_idx, 0,  step_empty_correct_count, n_empty)
+    e16_inc = _get_errors(incorrect_idx, 15, step_empty_correct_count, n_empty)
+    e1_cor  = _get_errors(correct_idx,   0,  step_empty_correct_count, n_empty)
+    e16_cor = _get_errors(correct_idx,   15, step_empty_correct_count, n_empty)
+    delta_inc = e16_inc - e1_inc
+    delta_cor = e16_cor - e1_cor
+    bin_min = int(min(delta_inc.min(), delta_cor.min())) - 1
+    bin_max = int(max(delta_inc.max(), delta_cor.max())) + 2
+    bins = range(bin_min, bin_max)
+    ax.hist(delta_inc, bins=bins, color='salmon', alpha=0.6,
+            edgecolor='black', lw=0.3,
+            label=f'Incorrect (mean={np.mean(delta_inc):.1f})')
+    ax.hist(delta_cor, bins=bins, color='mediumseagreen', alpha=0.6,
+            edgecolor='black', lw=0.3,
+            label=f'Correct (mean={np.mean(delta_cor):.1f})')
+    ax.axvline(0, color='black', ls='--', lw=1.2, alpha=0.7, label='no change')
+    ax.set_xlabel('Δ error count (Step 16 − Step 1)')
+    ax.set_ylabel('Number of puzzles')
+    ax.set_title('Error change across recursion\n(negative = improved)')
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.3)
+
+    fig.suptitle('E2.6a Fig2: Marginal Effect of Recursion (Step 1 → Step 16)',
+                 fontsize=13, fontweight='bold')
+    fig.tight_layout()
+    return fig
+
+
+def plot_trajectory_heatmap(
+    step_empty_correct_count, n_empty,
+    correct_flags: List[bool], save_dir: str,
+    n_steps: int = 16,
+):
+    def _get_trajectory(idx_list, source, n_cells, n_steps=16):
+        trajs = []
+        for i in idx_list:
+            T_i = source[i].shape[0]
+            row = []
+            for t in range(n_steps):
+                t_use = min(t, T_i - 1)
+                err = n_cells[i] - int(source[i][t_use])
+                row.append(err)
+            trajs.append(row)
+        return np.array(trajs)  # (N, 16)
+ 
+    def spearman_sort(idx_list, step_empty_correct_count, n_empty, n_steps):
+        trajs = _get_trajectory(idx_list, step_empty_correct_count, n_empty, n_steps)
+        steps = np.arange(n_steps)
+        rhos = np.array([
+            stats.spearmanr(steps, trajs[i]).statistic
+            for i in range(len(idx_list))
+        ])
+        valid_mask = ~np.isnan(rhos)
+        n_constant = (~valid_mask).sum()
+        trajs_valid = trajs[valid_mask]
+        rhos_valid  = rhos[valid_mask]
+        order = np.argsort(rhos_valid)
+        return trajs_valid[order], rhos_valid[order], n_constant
+ 
+    correct_idx, incorrect_idx = _split_indices(correct_flags)
+ 
+    groups = {}
+    for label, idx_list in [("Incorrect", incorrect_idx), ("Correct", correct_idx)]:
+        trajs, rhos, n_const = spearman_sort(
+            idx_list, step_empty_correct_count, n_empty, n_steps
+        )
+        n_total = len(idx_list)
+        n_valid = len(rhos)
+        n_imp   = (rhos < -0.3).sum()
+        n_wors  = (rhos >  0.3).sum()
+        n_osc   = n_valid - n_imp - n_wors
+        groups[label] = dict(
+            trajs=trajs, rhos=rhos,
+            n_total=n_total, n_valid=n_valid, n_constant=n_const,
+            n_improving=n_imp, n_oscillating=n_osc, n_worsening=n_wors,
+        )
+ 
+    global_vmax = np.nanpercentile(
+        np.concatenate([groups["Incorrect"]["trajs"].ravel(),
+                        groups["Correct"]["trajs"].ravel()]), 99
+    )
+ 
+    # ── layout ────────────────────────────────────────────────────────────────
+    # Width ratio: heatmap_incorrect : heatmap_correct : histogram = 2 : 3 : 2
+    # (correct has far more puzzles → taller, so give it more width share)
+    fig, axes = plt.subplots(
+        1, 3,
+        figsize=(26, 11),
+        gridspec_kw={"width_ratios": [2, 3, 2]},
+    )
+    fig.subplots_adjust(
+        left=0.06, right=0.97,
+        top=0.84,   bottom=0.08,
+        wspace=0.38,
+    )
+ 
+    step_ticks = np.arange(n_steps)
+ 
+    # ── heatmaps ─────────────────────────────────────────────────────────────
+    for ax, label, cmap in [
+        (axes[0], "Incorrect", "RdYlGn_r"),
+        (axes[1], "Correct",   "RdYlGn_r"),
+    ]:
+        g = groups[label]
+        trajs  = g["trajs"]
+        rhos   = g["rhos"]
+        n_valid  = g["n_valid"]
+        n_const  = g["n_constant"]
+        n_total  = g["n_total"]
+        n_imp    = g["n_improving"]
+        n_osc    = g["n_oscillating"]
+        n_wors   = g["n_worsening"]
+ 
+        im = ax.imshow(
+            trajs, aspect="auto", cmap=cmap, interpolation="nearest",
+            vmin=0, vmax=global_vmax,
+            extent=[-0.5, n_steps - 0.5, n_valid, 0],
+        )
+        plt.colorbar(im, ax=ax, label="Empty cell error count",
+                     fraction=0.035, pad=0.03, shrink=0.85)
+ 
+        ax.set_xlabel("Supervision step", fontsize=10)
+        ax.set_ylabel("Puzzle (sorted by Spearman ρ: improving → worsening)", fontsize=9)
+        ax.set_xticks(step_ticks)
+        ax.set_xticklabels([str(s + 1) for s in step_ticks], fontsize=7)
+ 
+        # group boundary lines
+        ax.axhline(n_imp,         color="white", lw=1.5, ls="--", alpha=0.85)
+        ax.axhline(n_imp + n_osc, color="white", lw=1.5, ls="--", alpha=0.85)
+ 
+        # group labels inside heatmap (right side)
+        for yp, gl in [
+            (n_imp / 2,                  "improving"),
+            (n_imp + n_osc / 2,          "oscillating"),
+            (n_imp + n_osc + n_wors / 2, "worsening"),
+        ]:
+            ax.text(n_steps - 0.6, yp, gl,
+                    va="center", ha="right", fontsize=7.5, color="white",
+                    fontweight="bold",
+                    bbox=dict(boxstyle="round,pad=0.2", fc="black", alpha=0.40, lw=0))
+ 
+        # ── per-axis title: two-line compact format ──────────────────────────
+        mean_rho   = np.nanmean(rhos)
+        median_rho = np.nanmedian(rhos)
+ 
+        # Line 1: header + constant-traj note (if any)
+        line1 = f"{label} puzzles  (n={n_total}; {n_valid} with valid ρ)"
+        if n_const > 0:
+            line1 += f"  [constant traj excluded: {n_const}]"
+ 
+        # Line 2: group counts (compact, single line)
+        line2 = (
+            f"improving (ρ<−0.3): {n_imp} ({n_imp/n_valid*100:.1f}%)   "
+            f"oscillating (|ρ|≤0.3): {n_osc} ({n_osc/n_valid*100:.1f}%)   "
+            f"worsening (ρ>0.3): {n_wors} ({n_wors/n_valid*100:.1f}%)"
+        )
+ 
+        # Line 3: summary stats
+        line3 = f"mean ρ = {mean_rho:.3f}     median ρ = {median_rho:.3f}"
+ 
+        ax.set_title(
+            f"{line1}\n{line2}\n{line3}",
+            fontsize=7.8,
+            loc="left",
+            pad=8,
+            linespacing=1.55,
+        )
+ 
+    # ── histogram ─────────────────────────────────────────────────────────────
+    ax = axes[2]
+    bins = np.linspace(-1, 1, 41)
+ 
+    rhos_inc = groups["Incorrect"]["rhos"]
+    rhos_cor = groups["Correct"]["rhos"]
+    mean_inc, median_inc = np.nanmean(rhos_inc), np.nanmedian(rhos_inc)
+    mean_cor, median_cor = np.nanmean(rhos_cor), np.nanmedian(rhos_cor)
+ 
+    ax.hist(rhos_inc, bins=bins, color="salmon",         alpha=0.70,
+            edgecolor="black", lw=0.3,
+            label=f"Incorrect  (mean={mean_inc:.2f}, median={median_inc:.2f})")
+    ax.hist(rhos_cor, bins=bins, color="mediumseagreen", alpha=0.70,
+            edgecolor="black", lw=0.3,
+            label=f"Correct    (mean={mean_cor:.2f}, median={median_cor:.2f})")
+ 
+    ax.axvline(-0.3, color="dimgray", ls="--", lw=1.2, alpha=0.8, label="|ρ|=0.3 threshold")
+    ax.axvline( 0.3, color="dimgray", ls="--", lw=1.2, alpha=0.8)
+    ax.axvline( 0.0, color="black",   ls="-",  lw=0.8, alpha=0.4)
+    ax.axvline(median_inc, color="firebrick", ls=":", lw=1.8, alpha=0.9,
+               label=f"Incorrect median ({median_inc:.2f})")
+    ax.axvline(median_cor, color="darkgreen",  ls=":", lw=1.8, alpha=0.9,
+               label=f"Correct median ({median_cor:.2f})")
+ 
+    n_const_inc = groups["Incorrect"]["n_constant"]
+    n_const_cor = groups["Correct"]["n_constant"]
+    if n_const_inc > 0 or n_const_cor > 0:
+        note = (f"Excluded (constant traj, ρ=NaN):\n"
+                f"  Incorrect: {n_const_inc}  |  Correct: {n_const_cor}")
+        ax.text(0.98, 0.97, note, transform=ax.transAxes,
+                ha="right", va="top", fontsize=7.5,
+                bbox=dict(boxstyle="round,pad=0.3", fc="lightyellow",
+                          ec="goldenrod", lw=1))
+ 
+    ax.set_xlabel("Spearman ρ  (step index vs empty-cell error count)", fontsize=10)
+    ax.set_ylabel("Number of puzzles", fontsize=10)
+    ax.set_title(
+        "Trajectory monotonicity distribution\n"
+        "(ρ→−1: monotone improving,  ρ→+1: worsening,  |ρ|≤0.3: oscillating)",
+        fontsize=9,
+        pad=8,
+    )
+    ax.legend(fontsize=8, loc="upper left")
+    ax.grid(True, alpha=0.3)
+ 
+    # ── suptitle (above all axes, no overlap) ────────────────────────────────
+    fig.suptitle(
+        "E2.6a Fig3: Per-puzzle Trajectory Shape — Monotone vs Oscillating\n"
+        "(sorted by Spearman ρ; dashed lines = group boundaries; "
+        "unified colorbar scale; constant trajectories excluded from ρ)",
+        fontsize=12, fontweight="bold",
+        y=0.98,
+    )
+ 
+    return fig
+
+def plot_cdf(
+    step_empty_correct_count, n_empty,
+    correct_flags: List[bool], save_dir: str
+):
+    correct_idx, incorrect_idx = _split_indices(correct_flags)
+    highlight_steps = [0, 7, 15]
+    step_labels = ['Step 1', 'Step 8', 'Step 16']
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    colors_inc = ['#e74c3c', '#c0392b', '#7b241c']
+    colors_cor = ['#27ae60', '#1e8449', '#145a32']
+
+    for col, (t, slabel) in enumerate(zip(highlight_steps, step_labels)):
+        for idx_list, colors, ls, group in [
+            (incorrect_idx, colors_inc, '-',  'Incorrect'),
+            (correct_idx,   colors_cor, '--', 'Correct'),
+        ]:
+            rates = _get_error_rates(idx_list, t, step_empty_correct_count, n_empty)
+            sorted_r = np.sort(rates)
+            cdf = np.arange(1, len(sorted_r) + 1) / len(sorted_r)
+            ax.plot(sorted_r, cdf, color=colors[col], lw=2.0, ls=ls,
+                    label=f'{group} {slabel} (mean={rates.mean():.2f})')
+
+    ax.axvline(0.5, color='gray', ls=':', lw=1, alpha=0.5, label='50% error rate')
+    ax.set_xlabel('Empty cell error rate (error count / n_empty cells)')
+    ax.set_ylabel('Cumulative fraction of puzzles')
+    ax.set_title('E2.6a Fig4: CDF of per-puzzle empty cell error rate\n'
+                 'Correct vs Incorrect across steps  '
+                 '(solid=incorrect, dashed=correct; left shift = improvement)')
+    ax.legend(fontsize=8, ncol=2, loc='lower right')
+    ax.set_xlim(-0.02, 1.02)
+    ax.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+    return fig
+
+
+def _padded_collect(indices, arrays, max_T):
+    """Collect per-step values as list-of-arrays for violin plots."""
+    # returns list of length max_T, each element = 1-D array of values at that step
+    per_step = [[] for _ in range(max_T)]
+    for i in indices:
+        t = arrays[i].shape[0]
+        for s in range(t):
+            per_step[s].append(float(arrays[i][s]))
+    return [np.array(v) if v else np.array([np.nan]) for v in per_step]
+
+def _style_violin(vp, color: str) -> None:
+    for body in vp['bodies']:
+        body.set_facecolor(color)
+        body.set_alpha(0.5)
+    for key in ('cmeans', 'cmins', 'cmaxes', 'cbars'):
+        if key in vp:
+            vp[key].set_color(color)
+
+def _gather_at_steps(indices: List[int], arr_list: List[np.ndarray],
+                     steps: Tuple[int, ...]) -> dict:
+    """Gather per-puzzle scalar values at specific 1-indexed steps."""
+    result = {s: [] for s in steps}
+    for i in indices:
+        a = arr_list[i]
+        for s in steps:
+            if s - 1 < a.shape[0]:
+                result[s].append(float(a[s - 1]))
+    return result
+ 
+ 
+def _build_violin_pair(ax, corr_data: dict, incorr_data: dict,
+                       selected_steps: Tuple[int, ...]) -> None:
+    """Draw paired violins (correct=green, incorrect=red) on a single axes."""
+    pos_c, pos_i, data_c, data_i = [], [], [], []
+    for k, s in enumerate(selected_steps):
+        pos = k * 3
+        pos_c.append(pos - 0.4)
+        pos_i.append(pos + 0.4)
+        data_c.append(corr_data[s] if corr_data[s] else [np.nan])
+        data_i.append(incorr_data[s] if incorr_data[s] else [np.nan])
+ 
+    vp_c = ax.violinplot(data_c, positions=pos_c,
+                         showmeans=True, showmedians=False, widths=0.7)
+    vp_i = ax.violinplot(data_i, positions=pos_i,
+                         showmeans=True, showmedians=False, widths=0.7)
+    _style_violin(vp_c, 'green')
+    _style_violin(vp_i, 'red')
+ 
+    ax.set_xticks([k * 3 for k in range(len(selected_steps))])
+    ax.set_xticklabels([f'Step {s}' for s in selected_steps])
+    ax.legend(handles=[Patch(facecolor='green', alpha=0.5, label='Correct'),
+                       Patch(facecolor='red', alpha=0.5, label='Incorrect')],
+              fontsize=9, loc='lower left')
+    ax.grid(True, alpha=0.3, axis='y')
+ 
+ 
+def _rank_per_step_mean(indices: List[int],
+                        step_output_correct_rank: List[np.ndarray],
+                        given_masks: List[np.ndarray],
+                        mask_fn, max_T: int,
+                        agg_fn=None) -> np.ndarray:
+    """Compute per-step aggregated value from rank data.
+    
+    agg_fn: callable(cell_ranks_1d) -> scalar.  Default: mean rank.
+    """
+    if agg_fn is None:
+        agg_fn = lambda r: r.astype(np.float32).mean()
+    vals = np.full((len(indices), max_T), np.nan)
+    for row, i in enumerate(indices):
+        rank_arr = step_output_correct_rank[i]      # (T, 81)
+        cell_mask = mask_fn(given_masks[i])          # (81,)
+        T = rank_arr.shape[0]
+        for t in range(T):
+            cell_ranks = rank_arr[t, cell_mask]
+            if len(cell_ranks) > 0:
+                vals[row, t] = agg_fn(cell_ranks)
+    return np.nanmean(vals, axis=0)
+ 
+ 
+
+def plot_top1_prob(
+    step_output_empty_top1_prob: List[np.ndarray],
+    step_output_given_top1_prob: List[np.ndarray],
+    correct_flags: List[bool],
+    save_dir: str,
+    selected_steps: Tuple[int, ...] = (1, 4, 8, 12, 16),
+) -> plt.Figure:
+    """
+    Proposal Fig1: violin plot of per-puzzle mean top-1 probability.
+    Two panels (Empty / Given), y-axis [0.90, 1.00].
+    """
+    correct_idx, incorrect_idx = _split_indices(correct_flags)
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
+ 
+    for ax, arr_list, title in zip(
+        axes,
+        [step_output_empty_top1_prob, step_output_given_top1_prob],
+        ['Empty Cells', 'Given Cells'],
+    ):
+        corr = _gather_at_steps(correct_idx, arr_list, selected_steps)
+        incorr = _gather_at_steps(incorrect_idx, arr_list, selected_steps)
+        _build_violin_pair(ax, corr, incorr, selected_steps)
+        ax.set_title(f'Top-1 Probability — {title}')
+        ax.set_ylabel('Top-1 Probability')
+        ax.set_ylim(0.90, 1.00)
+ 
+    fig.suptitle('E2.1b Fig1: Top-1 Probability', fontweight='bold')
+    fig.tight_layout()
+    return fig
+
+ 
+def plot_margin(
+    step_output_empty_margin: List[np.ndarray],
+    step_output_given_margin: List[np.ndarray],
+    correct_flags: List[bool],
+    save_dir: str,
+    selected_steps: Tuple[int, ...] = (1, 4, 8, 12, 16),
+) -> plt.Figure:
+    """Supplementary: margin (top-1 − top-2) violin, same layout as Fig1."""
+    correct_idx, incorrect_idx = _split_indices(correct_flags)
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
+ 
+    for ax, arr_list, title in zip(
+        axes,
+        [step_output_empty_margin, step_output_given_margin],
+        ['Empty Cells', 'Given Cells'],
+    ):
+        corr = _gather_at_steps(correct_idx, arr_list, selected_steps)
+        incorr = _gather_at_steps(incorrect_idx, arr_list, selected_steps)
+        _build_violin_pair(ax, corr, incorr, selected_steps)
+        ax.set_title(f'Margin (Top-1 − Top-2) — {title}')
+        ax.set_ylabel('Margin')
+        ax.set_ylim(0.90, 1.00)
+ 
+    fig.suptitle('E2.1b Fig1b: Margin', fontweight='bold')
+    fig.tight_layout()
+    return fig
+
+
+def plot_correct_answer_rank_histogram(
+    step_output_correct_rank: List[np.ndarray],
+    given_masks: List[np.ndarray],
+    correct_flags: List[bool],
+    save_dir: str,
+    selected_steps: Tuple[int, ...] = (1, 8, 16),
+) -> plt.Figure:
+    """
+    Proposal Fig2: rank histogram (1-9) of correct answer.
+    Layout: 2 rows (Empty / Given) × 2 cols (Incorrect / Correct).
+    Each panel overlays histograms at selected steps.
+    """
+    correct_idx, incorrect_idx = _split_indices(correct_flags)
+    ranks = np.arange(1, 10)
+    colors = {1: '#1f77b4', 8: '#ff7f0e', 16: '#2ca02c'}
+    n_sel = len(selected_steps)
+ 
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharey='row')
+ 
+    for row, (cell_label, mask_fn) in enumerate([
+        ('Empty Cells', lambda gm: ~gm),
+        ('Given Cells', lambda gm: gm),
+    ]):
+        for col, (indices, group_label) in enumerate([
+            (incorrect_idx, 'Incorrect'),
+            (correct_idx, 'Correct'),
+        ]):
+            ax = axes[row, col]
+            for si, s in enumerate(selected_steps):
+                all_ranks = []
+                for i in indices:
+                    rank_arr = step_output_correct_rank[i]    # (T, 81)
+                    cell_mask = mask_fn(given_masks[i])        # (81,)
+                    if s - 1 < rank_arr.shape[0]:
+                        all_ranks.append(rank_arr[s - 1, cell_mask])
+                if all_ranks:
+                    all_ranks = np.concatenate(all_ranks)
+                    counts, _ = np.histogram(all_ranks, bins=np.arange(0.5, 10.5, 1))
+                    props = counts / max(counts.sum(), 1)
+                    offset = (si - (n_sel - 1) / 2) * 0.25
+                    ax.bar(ranks + offset, props, width=0.25,
+                           color=colors[s], alpha=0.75, label=f'Step {s}')
+ 
+            ax.set_title(f'{cell_label} — {group_label}')
+            ax.set_xlabel('Rank (1=best, 9=worst)')
+            ax.set_ylabel('Proportion')
+            ax.set_xticks(ranks)
+            ax.legend(fontsize=8)
+            ax.grid(True, alpha=0.3, axis='y')
+ 
+    fig.suptitle('E2.1b Fig2: Correct Answer Rank Distribution', fontweight='bold')
+    fig.tight_layout()
+    return fig
+
+
+def plot_correct_is_top2(
+    step_output_correct_rank: List[np.ndarray],
+    given_masks: List[np.ndarray],
+    correct_flags: List[bool],
+    save_dir: str,
+) -> plt.Figure:
+    """
+    Proposal Fig3 (optional): fraction of cells where correct answer rank == 2.
+    Near-miss: correct answer is 2nd-ranked but not 1st.
+    y-axis auto-zoomed. Two panels: Empty / Given.
+    """
+    correct_idx, incorrect_idx = _split_indices(correct_flags)
+    max_T = max(r.shape[0] for r in step_output_correct_rank)
+    steps = np.arange(1, max_T + 1)
+    is_top2_fn = lambda r: float((r == 2).mean())
+ 
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
+ 
+    for ax, (cell_label, mask_fn) in zip(axes, [
+        ('Empty Cells', lambda gm: ~gm),
+        ('Given Cells', lambda gm: gm),
+    ]):
+        for indices, color, label in [
+            (correct_idx, 'g', 'Correct'),
+            (incorrect_idx, 'r', 'Incorrect'),
+        ]:
+            mean_curve = _rank_per_step_mean(
+                indices, step_output_correct_rank, given_masks,
+                mask_fn, max_T, agg_fn=is_top2_fn)
+            ax.plot(steps, mean_curve, f'{color}-o', ms=4, label=label)
+ 
+        # auto y-range from plotted data
+        all_y = np.concatenate([l.get_ydata() for l in ax.get_lines()])
+        all_y = all_y[~np.isnan(all_y)]
+        if len(all_y) > 0:
+            ax.set_ylim(max(0, all_y.min() - 0.02), min(1, all_y.max() + 0.02))
+ 
+        ax.set_title(f'Correct Answer is Rank 2 — {cell_label}')
+        ax.set_xlabel('Supervision Step')
+        ax.set_ylabel('Proportion')
+        ax.set_xticks(steps)
+        ax.legend(fontsize=9)
+        ax.grid(True, alpha=0.3)
+ 
+    fig.suptitle('E2.1b Fig3: Top-2 Correct Rate (Zoomed)', fontweight='bold')
+    fig.tight_layout()
+    return fig
+ 
+ 
+# ── Supplementary : Mean Rank Line Plot ─────────────────────
+ 
+def plot_correct_answer_rank_mean(
+    step_output_correct_rank: List[np.ndarray],
+    given_masks: List[np.ndarray],
+    correct_flags: List[bool],
+    save_dir: str,
+) -> plt.Figure:
+    """
+    Supplementary: mean correct answer rank (1-9) per step.
+    Two panels: Empty / Given. y-axis inverted (1=top).
+    """
+    correct_idx, incorrect_idx = _split_indices(correct_flags)
+    max_T = max(r.shape[0] for r in step_output_correct_rank)
+    steps = np.arange(1, max_T + 1)
+ 
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
+ 
+    for ax, (cell_label, mask_fn) in zip(axes, [
+        ('Empty Cells', lambda gm: ~gm),
+        ('Given Cells', lambda gm: gm),
+    ]):
+        for indices, color, label in [
+            (correct_idx, 'g', 'Correct'),
+            (incorrect_idx, 'r', 'Incorrect'),
+        ]:
+            mean_curve = _rank_per_step_mean(
+                indices, step_output_correct_rank, given_masks,
+                mask_fn, max_T)
+            ax.plot(steps, mean_curve, f'{color}-o', ms=4, label=label)
+ 
+        ax.set_title(f'Mean Rank of Correct Answer — {cell_label}')
+        ax.set_xlabel('Supervision Step')
+        ax.set_ylabel('Mean Rank (1=best, 9=worst)')
+        ax.set_xticks(steps)
+        ax.set_ylim(0.5, 9.5)
+        ax.invert_yaxis()
+        ax.legend(fontsize=9)
+        ax.grid(True, alpha=0.3)
+ 
+    fig.suptitle('E2.1b Supplementary: Mean Correct Answer Rank', fontweight='bold')
     fig.tight_layout()
     return fig

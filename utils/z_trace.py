@@ -65,6 +65,9 @@ class ZTrace:
         self._step_z_H_entropy = []
         self._step_z_L_entropy = []
 
+        self._step_output_top2_probs = []
+        self._step_output_argsort_idx = []
+
         # step level trajectories
         self.trajectories = []
         self.z_L_trajectories = []
@@ -80,6 +83,16 @@ class ZTrace:
         self.rec_z_L = []
         self.rec_correct_flags = []
         self.rec_ratings = []
+
+        # count of valid, given, empty cells
+        self.n_valid = []
+        self.n_given = []
+        self.n_empty = []
+
+        # count of correct predictions
+        self.step_cell_correct_count = []
+        self.step_given_correct_count = []
+        self.step_empty_correct_count = []
 
         # z_H logit lens
         self.step_cell_acc = []
@@ -111,6 +124,11 @@ class ZTrace:
         self.step_empty_cos_sim = []
         self.step_given_cos_sim = []
 
+        self.step_output_empty_top1_prob = []
+        self.step_output_empty_margin = []
+        self.step_output_given_top1_prob = []
+        self.step_output_given_margin = []
+        self.step_output_correct_rank = []  # List[np.ndarray], each (T, 81) int8
         # entropy
         self.step_z_H_empty_entropy = []
         self.step_z_H_given_entropy = []
@@ -151,6 +169,12 @@ class ZTrace:
         self._step_preds.append(torch.argmax(output, dim=-1))
         self._step_z_L_preds.append(torch.argmax(z_L_logit_lens, dim=-1))
 
+        probs = torch.softmax(output, dim=-1)                  # logits → probs，(B, seq_len, C)
+        top2_vals, _ = torch.topk(probs, k=2, dim=-1)  # (B, seq_len, 2)
+        self._step_output_top2_probs.append(top2_vals.detach())
+        argsort_desc = probs.argsort(dim=-1, descending=True)   # (B, seq_len, C)
+        self._step_output_argsort_idx.append(argsort_desc.detach())
+
         # logit lens entropy
         self._step_z_H_entropy.append(logit_entropy(output))
         self._step_z_L_entropy.append(logit_entropy(z_L_logit_lens))
@@ -166,6 +190,8 @@ class ZTrace:
         self._step_z_L_preds.clear()
         self._step_z_H_entropy.clear()
         self._step_z_L_entropy.clear()
+        self._step_output_top2_probs.clear()
+        self._step_output_argsort_idx.clear()
         # Update flag: should we collect recursion trace for the next batch?
         # Collect if we haven't reached the max for either correct or incorrect
         self.is_all_trace_collected = (
@@ -200,10 +226,14 @@ class ZTrace:
 
         step_z_H_np = torch.stack(self._step_z_H).cpu().float().numpy()  # (n_steps, B, L, D)
         step_z_L_np = torch.stack(self._step_z_L).cpu().float().numpy()  # (n_steps, B, L, D)
-        step_preds_np = torch.stack(self._step_preds).cpu().numpy()  # (n_steps, B, seq_len, n_classes)
-        step_z_L_preds_np = torch.stack(self._step_z_L_preds).cpu().numpy()  # (n_steps, B, seq_len, n_classes)
+        step_preds_np = torch.stack(self._step_preds).cpu().numpy()  # (n_steps, B, seq_len)
+        step_z_L_preds_np = torch.stack(self._step_z_L_preds).cpu().numpy()  # (n_steps, B, seq_len)
         step_z_H_ent_np = torch.stack(self._step_z_H_entropy).cpu().float().numpy()  # (n_steps, B, seq_len)
         step_z_L_ent_np = torch.stack(self._step_z_L_entropy).cpu().float().numpy()  # (n_steps, B, seq_len)
+
+        # top 2 probs and idx
+        step_top2_probs_np = torch.stack(self._step_output_top2_probs).cpu().float().numpy()
+        step_argsort_np = torch.stack(self._step_output_argsort_idx).cpu().numpy()
 
         # rec_z_H/L are called snapshots_per_step times per supervision step
         if self._rec_z_H:
@@ -244,7 +274,7 @@ class ZTrace:
             D = z_H_last.shape[-1]
             L = z_H_last.shape[-2]
 
-            cell_start = self.puzzle_emb_len  # e.g. 2
+            cell_start = self.puzzle_emb_len  # TRM: 16, HRM: 1
             cell_end = self.puzzle_emb_len + 81
 
             z_H_cell = z_H_last[:, cell_start:cell_end, :]   # (T_actual, 81, D)
@@ -280,9 +310,13 @@ class ZTrace:
             n_empty = empty.sum()
             given_valid = given & cell_mask
 
-            cell_acc = per_step_correct[:, cell_mask].sum(axis=1).astype(np.float32) / max(n_valid, 1)
-            given_acc = per_step_correct[:, given_valid].sum(axis=1).astype(np.float32) / max(n_given, 1)
-            empty_acc = per_step_correct[:, empty].sum(axis=1).astype(np.float32) / max(n_empty, 1)
+            cell_correct_count = per_step_correct[:, cell_mask].sum(axis=1).astype(np.float32)
+            given_correct_count = per_step_correct[:, given_valid].sum(axis=1).astype(np.float32)
+            empty_correct_count = per_step_correct[:, empty].sum(axis=1).astype(np.float32)
+
+            cell_acc = cell_correct_count / max(n_valid, 1)
+            given_acc = given_correct_count / max(n_given, 1)
+            empty_acc = empty_correct_count / max(n_empty, 1)
 
             # prediction stability: start from the last step and go backwards, the earliest step that makes the prediction no longer change
             stable_step = T_actual
@@ -333,6 +367,31 @@ class ZTrace:
             given_only_z_H_correct_rate = only_z_H_correct[:, given_valid].sum(axis=1).astype(np.float32) / n_g
             given_only_z_L_correct_rate = only_z_L_correct[:, given_valid].sum(axis=1).astype(np.float32) / n_g
 
+            # top-2 probs, margin, correct_rank
+            sample_top2_probs = step_top2_probs_np[:T_actual, b, :, :]  # (T_actual, 81, 2)
+            sample_argsort_idx = step_argsort_np[:T_actual, b, :, :]  # (T_actual, 81, 9)
+
+            top1_prob = sample_top2_probs[..., 0]  # (T_actual, 81)
+            top2_prob = sample_top2_probs[..., 1]  # (T_actual, 81)
+            margin = top1_prob - top2_prob  # (T_actual, 81)
+
+            C = sample_argsort_idx.shape[-1]                                  # 9
+            rank_of_class = np.empty_like(sample_argsort_idx)                 # (T, 81, C)
+            idx_t, idx_c = np.mgrid[:T_actual, :81]                      # broadcast grids
+            for r in range(C):
+                rank_of_class[idx_t, idx_c, sample_argsort_idx[..., r]] = r
+            correct_rank = rank_of_class[
+                idx_t, idx_c, np.broadcast_to(cell_labels[None, :], (T_actual, 81))
+            ] + 1
+
+            # empty cells aggregation
+            output_empty_top1_prob = top1_prob[:, empty].mean(axis=1).astype(np.float32)  # (T,)
+            output_empty_margin = margin[:, empty].mean(axis=1).astype(np.float32)  # (T,)
+
+            # given cells aggregation
+            output_given_top1_prob = top1_prob[:, given_valid].mean(axis=1).astype(np.float32)  # (T,)
+            output_given_margin = margin[:, given_valid].mean(axis=1).astype(np.float32)  # (T,)
+
             # per-step cosine similarity between z_H and z_L
             empty_cos_sim = np.array([
                 np.mean([
@@ -360,6 +419,12 @@ class ZTrace:
             self.residuals.append(diffs)
             self.z_L_residuals.append(z_L_diffs)
             self.pos_residuals.append(pos_diffs)
+            self.n_valid.append(n_valid)
+            self.n_given.append(n_given)
+            self.n_empty.append(n_empty)
+            self.step_cell_correct_count.append(cell_correct_count)
+            self.step_given_correct_count.append(given_correct_count)
+            self.step_empty_correct_count.append(empty_correct_count)
             self.step_cell_acc.append(cell_acc)
             self.step_empty_acc.append(empty_acc)
             self.step_given_acc.append(given_acc)
@@ -385,6 +450,11 @@ class ZTrace:
             self.step_z_H_given_entropy.append(z_H_given_entropy)
             self.step_z_L_empty_entropy.append(z_L_empty_entropy)
             self.step_z_L_given_entropy.append(z_L_given_entropy)
+            self.step_output_empty_top1_prob.append(output_empty_top1_prob)
+            self.step_output_empty_margin.append(output_empty_margin)
+            self.step_output_given_top1_prob.append(output_given_top1_prob)
+            self.step_output_given_margin.append(output_given_margin)
+            self.step_output_correct_rank.append(correct_rank.astype(np.int8))   # (T_actual, 81) int8
             self.n_stored += 1
 
             # recursion level
@@ -440,6 +510,11 @@ class ZTrace:
             "step_z_H_given_entropy": len(self.step_z_H_given_entropy),
             "step_z_L_empty_entropy": len(self.step_z_L_empty_entropy),
             "step_z_L_given_entropy": len(self.step_z_L_given_entropy),
+            "step_output_empty_top1_prob": len(self.step_output_empty_top1_prob),
+            "step_output_empty_margin": len(self.step_output_empty_margin),
+            "step_output_given_top1_prob": len(self.step_output_given_top1_prob),
+            "step_output_given_margin": len(self.step_output_given_margin),
+            "step_output_correct_rank": len(self.step_output_correct_rank),
         }
         ok = len(set(lens.values())) == 1
         print(f"\n[ZTrace] supervision step alignment: {'OK' if ok else 'FAILED'}")

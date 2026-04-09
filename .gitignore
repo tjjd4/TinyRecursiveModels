@@ -3,6 +3,7 @@ wandb/
 data/
 checkpoints/
 outputs/
+logs/
 .venv/
 
 # Claude Code

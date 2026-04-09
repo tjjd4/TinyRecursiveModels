@@ -114,9 +114,11 @@ load_checkpoint="checkpoints/Sudoku/hrm-hf/checkpoint" \
 +run_name=${run_name}
 ```
 
-## Split Dataset correct and incorrect
+## Scripts
 
-### Sudoku-Extreme:
+### Split Dataset correct and incorrect
+
+#### Sudoku-Extreme:
 
 ```bash
 python split_dataset.py \
@@ -128,7 +130,7 @@ arch.H_cycles=3 arch.L_cycles=6 \
 load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_44/step_65100"
 ```
 
-#### With Rating
+##### With Rating
 
 ```bash
 python split_dataset_with_rating.py \
@@ -140,6 +142,20 @@ arch.H_cycles=3 arch.L_cycles=6 \
 load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_44/step_65100"
 ```
 
+### Consistency Check
+
+#### Sudoku-Extreme:
+
+```bash
+python scripts/consistency_check.py \
+arch=trm \
+data_paths="[data/sudoku-extreme-1k-aug-1000]" \
+arch.mlp_t=True arch.pos_encodings=none \
+arch.L_layers=2 \
+arch.H_cycles=3 arch.L_cycles=6 \
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_44/step_65100"
++num_runs=5
+```
 
 ## TRM Pretrain Experiments
 

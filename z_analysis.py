@@ -25,7 +25,7 @@ from omegaconf import DictConfig
 
 from puzzle_dataset_with_rating import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
 from utils.functions import load_model_class, get_model_source_path, load_checkpoint_from_path
-from utils.matplot_figures import _plot_pca_split, _plot_pca_combined, _plot_forward_residual, _plot_pca_variance, _plot_displacement_hist, _plot_init_to_final_split, _plot_pos_residual_heatmap_given, _plot_pos_residual_heatmap_empty, _plot_pos_residual_by_step, _plot_rating_distribution, _plot_residual_vs_rating, _plot_accuracy_vs_rating, _plot_residual_by_rating_colormap, _plot_recursion_residual, _plot_pred_stability, _plot_logit_lens_accuracy, _plot_disagreement, _plot_cosine_similarity, _plot_cka_matrices, _plot_violation_curve, _plot_difficulty_stratification, _plot_logit_lens_entropy
+from utils.matplot_figures import plot_pca_split, plot_pca_combined, plot_forward_residual, plot_pca_variance, plot_displacement_hist, plot_init_to_final_split, plot_pos_residual_heatmap_given, plot_pos_residual_heatmap_empty, plot_pos_residual_by_step, plot_rating_distribution, plot_residual_vs_rating, plot_accuracy_vs_rating, plot_residual_by_rating_colormap, plot_recursion_residual, plot_pred_stability, plot_logit_lens_accuracy, plot_disagreement, plot_cosine_similarity, plot_cka_matrices, plot_violation_curve, plot_difficulty_stratification, plot_logit_lens_entropy, plot_severity, plot_recursion_effect, plot_trajectory_heatmap, plot_cdf, plot_top1_prob, plot_margin, plot_correct_answer_rank_histogram, plot_correct_is_top2
 
 from models.losses.loss_fn import IGNORE_LABEL_ID
 from utils.z_trace import ZTrace
@@ -376,51 +376,63 @@ def run_z_analysis(
     wandb_log["z_analysis/pca_explained_variance"] = ev_table
 
     # plots → wandb.Image
-    wandb_log["z_analysis/z_H_pca_split"] = _save_wandb(_plot_pca_split(proj, sample_ids, sub_flags, pca, save_dir, z_label="z_H"), save_dir, "z_H_trajectory_pca_split.png")
-    wandb_log["z_analysis/z_H_pca_combined"] = _save_wandb(_plot_pca_combined(proj, sample_ids, sub_flags, pca, proj_inits, save_dir, z_label="z_H"), save_dir, "z_H_trajectory_pca_combined.png")
-    wandb_log["z_analysis/z_H_forward_residual"] = _save_wandb(_plot_forward_residual(collector.residuals, collector.correct_flags, save_dir, z_label="z_H"), save_dir, "z_H_forward_residual.png")
-    wandb_log["z_analysis/z_H_pca_variance"] = _save_wandb(_plot_pca_variance(pca, save_dir, z_label="z_H"), save_dir, "z_H_pca_variance.png")
-    wandb_log["z_analysis/z_H_displacement_hist"] = _save_wandb(_plot_displacement_hist(collector.trajectories, collector.correct_flags, save_dir, z_label="z_H"), save_dir, "z_H_displacement_histogram.png")
-    wandb_log["z_analysis/z_H_pca_init_to_final"] = _save_wandb(_plot_init_to_final_split(proj_inits, proj, sample_ids, sub_flags, pca, save_dir, z_label="z_H"), save_dir, "z_H_pca_init_to_final.png")
-    # wandb_log["z_analysis/z_H_pos_residual_heatmap_given"] = _save_wandb(_plot_pos_residual_heatmap_given(collector.pos_residuals, collector.given_masks, collector.correct_flags, puzzle_emb_len=puzzle_emb_len), save_dir, "z_H_pos_residual_heatmap_given.png")
-    # wandb_log["z_analysis/z_H_pos_residual_heatmap_empty"] = _save_wandb(_plot_pos_residual_heatmap_empty(collector.pos_residuals, collector.given_masks, collector.correct_flags, puzzle_emb_len=puzzle_emb_len), save_dir, "z_H_pos_residual_heatmap_empty.png")
-    # wandb_log["z_analysis/z_H_pos_residual_by_step"] = _save_wandb(_plot_pos_residual_by_step(collector.pos_residuals, collector.given_masks, collector.correct_flags, puzzle_emb_len=puzzle_emb_len), save_dir, "z_H_pos_residual_by_step.png")
+    wandb_log["z_analysis/z_H_pca_split"] = _save_wandb(plot_pca_split(proj, sample_ids, sub_flags, pca, save_dir, z_label="z_H"), save_dir, "z_H_trajectory_pca_split.png")
+    wandb_log["z_analysis/z_H_pca_combined"] = _save_wandb(plot_pca_combined(proj, sample_ids, sub_flags, pca, proj_inits, save_dir, z_label="z_H"), save_dir, "z_H_trajectory_pca_combined.png")
+    wandb_log["z_analysis/z_H_forward_residual"] = _save_wandb(plot_forward_residual(collector.residuals, collector.correct_flags, save_dir, z_label="z_H"), save_dir, "z_H_forward_residual.png")
+    wandb_log["z_analysis/z_H_pca_variance"] = _save_wandb(plot_pca_variance(pca, save_dir, z_label="z_H"), save_dir, "z_H_pca_variance.png")
+    wandb_log["z_analysis/z_H_displacement_hist"] = _save_wandb(plot_displacement_hist(collector.trajectories, collector.correct_flags, save_dir, z_label="z_H"), save_dir, "z_H_displacement_histogram.png")
+    wandb_log["z_analysis/z_H_pca_init_to_final"] = _save_wandb(plot_init_to_final_split(proj_inits, proj, sample_ids, sub_flags, pca, save_dir, z_label="z_H"), save_dir, "z_H_pca_init_to_final.png")
+    # wandb_log["z_analysis/z_H_pos_residual_heatmap_given"] = _save_wandb(plot_pos_residual_heatmap_given(collector.pos_residuals, collector.given_masks, collector.correct_flags, puzzle_emb_len=puzzle_emb_len), save_dir, "z_H_pos_residual_heatmap_given.png")
+    # wandb_log["z_analysis/z_H_pos_residual_heatmap_empty"] = _save_wandb(plot_pos_residual_heatmap_empty(collector.pos_residuals, collector.given_masks, collector.correct_flags, puzzle_emb_len=puzzle_emb_len), save_dir, "z_H_pos_residual_heatmap_empty.png")
+    # wandb_log["z_analysis/z_H_pos_residual_by_step"] = _save_wandb(plot_pos_residual_by_step(collector.pos_residuals, collector.given_masks, collector.correct_flags, puzzle_emb_len=puzzle_emb_len), save_dir, "z_H_pos_residual_by_step.png")
 
-    wandb_log["z_analysis/z_L_pca_split"] = _save_wandb(_plot_pca_split(proj_z_L, sample_ids, sub_flags, pca_L, save_dir, z_label="z_L"), save_dir, "z_L_trajectory_pca_split.png")
-    wandb_log["z_analysis/z_L_pca_combined"] = _save_wandb(_plot_pca_combined(proj_z_L, sample_ids, sub_flags, pca_L, proj_inits_L, save_dir, z_label="z_L"), save_dir, "z_L_trajectory_pca_combined.png")
-    wandb_log["z_analysis/z_L_forward_residual"] = _save_wandb(_plot_forward_residual(collector.z_L_residuals, collector.correct_flags, save_dir, z_label="z_L"), save_dir, "z_L_forward_residual.png")
-    wandb_log["z_analysis/z_L_pca_variance"] = _save_wandb(_plot_pca_variance(pca_L, save_dir, z_label="z_L"), save_dir, "z_L_pca_variance.png")
-    wandb_log["z_analysis/z_L_displacement_hist"] = _save_wandb(_plot_displacement_hist(collector.z_L_trajectories, collector.correct_flags, save_dir, z_label="z_L"), save_dir, "z_L_displacement_histogram.png")
-    wandb_log["z_analysis/z_L_pca_init_to_final"] = _save_wandb(_plot_init_to_final_split(proj_inits_L, proj_z_L, sample_ids, sub_flags, pca_L, save_dir, z_label="z_L"), save_dir, "z_L_pca_init_to_final.png")
+    wandb_log["z_analysis/z_L_pca_split"] = _save_wandb(plot_pca_split(proj_z_L, sample_ids, sub_flags, pca_L, save_dir, z_label="z_L"), save_dir, "z_L_trajectory_pca_split.png")
+    wandb_log["z_analysis/z_L_pca_combined"] = _save_wandb(plot_pca_combined(proj_z_L, sample_ids, sub_flags, pca_L, proj_inits_L, save_dir, z_label="z_L"), save_dir, "z_L_trajectory_pca_combined.png")
+    wandb_log["z_analysis/z_L_forward_residual"] = _save_wandb(plot_forward_residual(collector.z_L_residuals, collector.correct_flags, save_dir, z_label="z_L"), save_dir, "z_L_forward_residual.png")
+    wandb_log["z_analysis/z_L_pca_variance"] = _save_wandb(plot_pca_variance(pca_L, save_dir, z_label="z_L"), save_dir, "z_L_pca_variance.png")
+    wandb_log["z_analysis/z_L_displacement_hist"] = _save_wandb(plot_displacement_hist(collector.z_L_trajectories, collector.correct_flags, save_dir, z_label="z_L"), save_dir, "z_L_displacement_histogram.png")
+    wandb_log["z_analysis/z_L_pca_init_to_final"] = _save_wandb(plot_init_to_final_split(proj_inits_L, proj_z_L, sample_ids, sub_flags, pca_L, save_dir, z_label="z_L"), save_dir, "z_L_pca_init_to_final.png")
 
-    wandb_log["z_analysis/pred_stability_hist"] = _save_wandb(_plot_pred_stability(collector.step_pred_stable, collector.correct_flags, save_dir), save_dir, "pred_stability_hist.png")
+    wandb_log["z_analysis/pred_stability_hist"] = _save_wandb(plot_pred_stability(collector.step_pred_stable, collector.correct_flags, save_dir), save_dir, "pred_stability_hist.png")
 
     # Logit lens
-    wandb_log["z_analysis/z_H_logit_lens_accuracy"] = _save_wandb(_plot_logit_lens_accuracy(collector.step_cell_acc, collector.step_empty_acc, collector.step_given_acc, collector.correct_flags, save_dir, z_label="z_H"), save_dir, "logit_lens_accuracy.png")
-    wandb_log["z_analysis/z_L_logit_lens_accuracy"] = _save_wandb(_plot_logit_lens_accuracy(collector.step_z_L_cell_acc, collector.step_z_L_empty_acc, collector.step_z_L_given_acc, collector.correct_flags, save_dir, z_label="z_L"), save_dir, "logit_lens_accuracy_z_L.png")
-    wandb_log["z_analysis/logit_lens_entropy"] = _save_wandb(_plot_logit_lens_entropy(collector.step_z_H_empty_entropy, collector.step_z_H_given_entropy, collector.step_z_L_empty_entropy, collector.step_z_L_given_entropy, collector.correct_flags, save_dir), save_dir, "logit_lens_entropy.png")
+    wandb_log["z_analysis/z_H_logit_lens_accuracy"] = _save_wandb(plot_logit_lens_accuracy(collector.step_cell_acc, collector.step_empty_acc, collector.step_given_acc, collector.correct_flags, save_dir, z_label="z_H"), save_dir, "logit_lens_accuracy.png")
+    wandb_log["z_analysis/z_L_logit_lens_accuracy"] = _save_wandb(plot_logit_lens_accuracy(collector.step_z_L_cell_acc, collector.step_z_L_empty_acc, collector.step_z_L_given_acc, collector.correct_flags, save_dir, z_label="z_L"), save_dir, "logit_lens_accuracy_z_L.png")
+    wandb_log["z_analysis/logit_lens_entropy"] = _save_wandb(plot_logit_lens_entropy(collector.step_z_H_empty_entropy, collector.step_z_H_given_entropy, collector.step_z_L_empty_entropy, collector.step_z_L_given_entropy, collector.correct_flags, save_dir), save_dir, "logit_lens_entropy.png")
 
-    wandb_log["z_analysis/disagreement"] = _save_wandb(_plot_disagreement(collector.step_empty_agree_correct, collector.step_empty_both_wrong_same, collector.step_empty_both_wrong_diff, collector.step_empty_only_z_H_correct, collector.step_empty_only_z_L_correct, collector.step_given_agree_correct, collector.step_given_both_wrong_same, collector.step_given_both_wrong_diff, collector.step_given_only_z_H_correct, collector.step_given_only_z_L_correct, collector.correct_flags, save_dir), save_dir, "disagreement.png")
-    wandb_log["z_analysis/cosine_similarity"] = _save_wandb(_plot_cosine_similarity(collector.step_empty_cos_sim, collector.step_given_cos_sim, collector.correct_flags, save_dir), save_dir, "cosine_similarity.png")
+    wandb_log["z_analysis/disagreement"] = _save_wandb(plot_disagreement(collector.step_empty_agree_correct, collector.step_empty_both_wrong_same, collector.step_empty_both_wrong_diff, collector.step_empty_only_z_H_correct, collector.step_empty_only_z_L_correct, collector.step_given_agree_correct, collector.step_given_both_wrong_same, collector.step_given_both_wrong_diff, collector.step_given_only_z_H_correct, collector.step_given_only_z_L_correct, collector.correct_flags, save_dir), save_dir, "disagreement.png")
+    wandb_log["z_analysis/cosine_similarity"] = _save_wandb(plot_cosine_similarity(collector.step_empty_cos_sim, collector.step_given_cos_sim, collector.correct_flags, save_dir), save_dir, "cosine_similarity.png")
 
     # CKA matrices
-    wandb_log["z_analysis/cka_matrices"] = _save_wandb(_plot_cka_matrices(collector.trajectories, collector.correct_flags, save_dir, z_label="z_H"), save_dir, "cka_matrices.png")
-    wandb_log["z_analysis/cka_matrices_z_L"] = _save_wandb(_plot_cka_matrices(collector.z_L_trajectories, collector.correct_flags, save_dir, z_label="z_L"), save_dir, "cka_matrices_z_L.png")
+    wandb_log["z_analysis/cka_matrices"] = _save_wandb(plot_cka_matrices(collector.trajectories, collector.correct_flags, save_dir, z_label="z_H"), save_dir, "cka_matrices.png")
+    wandb_log["z_analysis/cka_matrices_z_L"] = _save_wandb(plot_cka_matrices(collector.z_L_trajectories, collector.correct_flags, save_dir, z_label="z_L"), save_dir, "cka_matrices_z_L.png")
 
     # Violation curve
-    wandb_log["z_analysis/violation_curve"] = _save_wandb(_plot_violation_curve(collector.step_preds_all, collector.correct_flags, save_dir), save_dir, "violation_curve.png")
+    wandb_log["z_analysis/violation_curve"] = _save_wandb(plot_violation_curve(collector.step_preds_all, collector.given_masks, collector.ratings, collector.correct_flags, save_dir), save_dir, "violation_curve.png")
 
     # Difficulty stratification
-    wandb_log["z_analysis/difficulty_stratification"] = _save_wandb(_plot_difficulty_stratification(collector.step_empty_acc, collector.given_masks, collector.correct_flags, save_dir), save_dir, "difficulty_stratification.png")
+    wandb_log["z_analysis/difficulty_stratification"] = _save_wandb(plot_difficulty_stratification(collector.step_empty_acc, collector.given_masks, collector.ratings, collector.correct_flags, save_dir), save_dir, "difficulty_stratification.png")
+
+    # error count
+    wandb_log["z_analysis/severity"] = _save_wandb(plot_severity(collector.step_empty_correct_count, collector.step_given_correct_count, collector.n_empty, collector.n_given, collector.correct_flags, save_dir), save_dir, "severity.png")
+    wandb_log["z_analysis/recursion_effect"] = _save_wandb(plot_recursion_effect(collector.step_empty_correct_count, collector.n_empty, collector.correct_flags, save_dir), save_dir, "recursion_effect.png")
+    wandb_log["z_analysis/trajectory_heatmap"] = _save_wandb(plot_trajectory_heatmap(collector.step_empty_correct_count, collector.n_empty, collector.correct_flags, save_dir), save_dir, "trajectory_heatmap.png")
+    wandb_log["z_analysis/cdf"] = _save_wandb(plot_cdf(collector.step_empty_correct_count, collector.n_empty, collector.correct_flags, save_dir), save_dir, "cdf.png")
+
+    # top 2
+    wandb_log["z_analysis/top1_prob_violin"] = _save_wandb(plot_top1_prob(collector.step_output_empty_top1_prob, collector.step_output_given_top1_prob, collector.correct_flags, save_dir), save_dir, "top1_prob_violin.png")
+    wandb_log["z_analysis/margin_violin"] = _save_wandb(plot_margin(collector.step_output_empty_margin, collector.step_output_given_margin, collector.correct_flags, save_dir), save_dir, "margin_violin.png")
+    wandb_log["z_analysis/correct_answer_rank_histogram"] = _save_wandb(plot_correct_answer_rank_histogram(collector.step_output_correct_rank, collector.given_masks, collector.correct_flags, save_dir), save_dir, "correct_answer_rank_histogram.png")
+    wandb_log["z_analysis/correct_is_top2"] = _save_wandb(plot_correct_is_top2(collector.step_output_correct_rank, collector.given_masks, collector.correct_flags, save_dir), save_dir, "correct_is_top2.png")
 
     # Rating-based plots
     if collector.ratings:
-        wandb_log["z_analysis/rating_distribution"] = _save_wandb(_plot_rating_distribution(collector.ratings, collector.correct_flags, save_dir), save_dir, "rating_distribution.png")
-        wandb_log["z_analysis/residual_vs_rating"] = _save_wandb(_plot_residual_vs_rating(collector.residuals, collector.ratings, collector.correct_flags, save_dir), save_dir, "residual_vs_rating.png")
-        wandb_log["z_analysis/accuracy_vs_rating"] = _save_wandb(_plot_accuracy_vs_rating(collector.correct_flags, collector.ratings, save_dir), save_dir, "accuracy_vs_rating.png")
-        wandb_log["z_analysis/residual_colormap_rating"] = _save_wandb(_plot_residual_by_rating_colormap(collector.residuals, collector.ratings, collector.correct_flags, save_dir), save_dir, "residual_colormap_rating.png")
+        wandb_log["z_analysis/rating_distribution"] = _save_wandb(plot_rating_distribution(collector.ratings, collector.correct_flags, save_dir), save_dir, "rating_distribution.png")
+        wandb_log["z_analysis/residual_vs_rating"] = _save_wandb(plot_residual_vs_rating(collector.residuals, collector.ratings, collector.correct_flags, save_dir), save_dir, "residual_vs_rating.png")
+        wandb_log["z_analysis/accuracy_vs_rating"] = _save_wandb(plot_accuracy_vs_rating(collector.correct_flags, collector.ratings, save_dir), save_dir, "accuracy_vs_rating.png")
+        wandb_log["z_analysis/residual_colormap_rating"] = _save_wandb(plot_residual_by_rating_colormap(collector.residuals, collector.ratings, collector.correct_flags, save_dir), save_dir, "residual_colormap_rating.png")
     if collector.rec_z_H:
-        wandb_log["z_analysis/recursion_residual"] = _save_wandb(_plot_recursion_residual(rec_z_H=collector.rec_z_H, rec_z_L=collector.rec_z_L, rec_correct_flags=collector.rec_correct_flags, H_cycles=collector.H_cycles, L_cycles=collector.L_cycles, H_init=h_init_vec, L_init=l_init_vec, save_dir=save_dir), save_dir, "recursion_residual.png")
+        wandb_log["z_analysis/recursion_residual"] = _save_wandb(plot_recursion_residual(rec_z_H=collector.rec_z_H, rec_z_L=collector.rec_z_L, rec_correct_flags=collector.rec_correct_flags, H_cycles=collector.H_cycles, L_cycles=collector.L_cycles, H_init=h_init_vec, L_init=l_init_vec, save_dir=save_dir), save_dir, "recursion_residual.png")
     
     # Drop None values (plots that returned None due to insufficient data)
     wandb_log = {k: v for k, v in wandb_log.items() if v is not None}
