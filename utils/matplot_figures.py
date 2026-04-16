@@ -139,10 +139,12 @@ def plot_displacement_hist(trajs, flags, save_dir, z_label="z_H"):
         return None
     bins = np.linspace(min(all_vals), max(all_vals), 40)
     fig, ax = plt.subplots(figsize=(8, 4))
-    ax.hist(correct_disp,   bins=bins, alpha=0.6, color="steelblue",
-            label=f"Correct  (n={len(correct_disp)})",   density=True)
-    ax.hist(incorrect_disp, bins=bins, alpha=0.6, color="firebrick",
-            label=f"Incorrect  (n={len(incorrect_disp)})", density=True)
+    if correct_disp:
+        ax.hist(correct_disp,   bins=bins, alpha=0.6, color="steelblue",
+                label=f"Correct  (n={len(correct_disp)})",   density=True)
+    if incorrect_disp:
+        ax.hist(incorrect_disp, bins=bins, alpha=0.6, color="firebrick",
+                label=f"Incorrect  (n={len(incorrect_disp)})", density=True)
     ax.set_xlabel(f"Total {z_label} displacement  (sum of step-wise L2 norms)")
     ax.set_ylabel("Density")
     ax.set_title(f"{z_label} trajectory total displacement  (correct vs incorrect)")
@@ -807,10 +809,12 @@ def plot_pred_stability(step_pred_stable, correct_flags: List[bool], save_dir: s
     max_T = max(step_pred_stable) + 1 if step_pred_stable else 16
     bins = np.arange(0, max_T + 1) - 0.5
     
-    ax.hist(correct_stable, bins=bins, alpha=0.6, color='green', 
-            label=f'Correct (mean={np.mean(correct_stable):.1f})', density=True)
-    ax.hist(incorrect_stable, bins=bins, alpha=0.6, color='red',
-            label=f'Incorrect (mean={np.mean(incorrect_stable):.1f})', density=True)
+    if correct_stable:
+        ax.hist(correct_stable, bins=bins, alpha=0.6, color='green',
+                label=f'Correct (n={len(correct_stable)}, mean={np.mean(correct_stable):.1f})', density=True)
+    if incorrect_stable:
+        ax.hist(incorrect_stable, bins=bins, alpha=0.6, color='red',
+                label=f'Incorrect (n={len(incorrect_stable)}, mean={np.mean(incorrect_stable):.1f})', density=True)
     ax.set_xlabel('Stable Match Step (prediction stops changing)')
     ax.set_ylabel('Density')
     ax.set_title('Prediction Stability (Early Stopping Analysis)')
@@ -992,13 +996,25 @@ def _compute_cka_matrix(Z):
     Z: (N, T, D) — N puzzles, T steps, D hidden dim
     Returns: (T, T) CKA matrix
     """
+    Z = Z.astype(np.float32)
     T = Z.shape[1]
+
+    # cache centered vectors
+    centered = [Z[:, t, :] - Z[:, t, :].mean(axis=0, keepdims=True)
+                for t in range(T)]
+
+    # cache gram norms
+    gram_norms = [np.linalg.norm(X.T @ X, 'fro') for X in centered]
+
     cka_mat = np.zeros((T, T))
     for i in range(T):
         for j in range(i, T):
-            val = linear_cka(Z[:, i, :], Z[:, j, :])
+            YtX = centered[j].T @ centered[i]   # (D, D)
+            val = float(np.linalg.norm(YtX, 'fro') ** 2
+                        / (gram_norms[i] * gram_norms[j]))
             cka_mat[i, j] = val
             cka_mat[j, i] = val
+
     return cka_mat
 
 
@@ -1423,6 +1439,9 @@ def plot_recursion_effect(
         (axes[0], incorrect_idx, 'Incorrect', 'salmon'),
         (axes[1], correct_idx,   'Correct',   'mediumseagreen'),
     ]:
+        if len(idx_list) == 0:
+            ax.set_title(f'{label}: no puzzles')
+            continue
         e1  = _get_errors(idx_list, 0,  step_empty_correct_count, n_empty)
         e16 = _get_errors(idx_list, 15, step_empty_correct_count, n_empty)
         ax.scatter(e1, e16, alpha=0.25, s=6, color=color, rasterized=True)
@@ -1440,21 +1459,36 @@ def plot_recursion_effect(
 
     # Delta histogram overlay
     ax = axes[2]
-    e1_inc  = _get_errors(incorrect_idx, 0,  step_empty_correct_count, n_empty)
-    e16_inc = _get_errors(incorrect_idx, 15, step_empty_correct_count, n_empty)
-    e1_cor  = _get_errors(correct_idx,   0,  step_empty_correct_count, n_empty)
-    e16_cor = _get_errors(correct_idx,   15, step_empty_correct_count, n_empty)
-    delta_inc = e16_inc - e1_inc
-    delta_cor = e16_cor - e1_cor
-    bin_min = int(min(delta_inc.min(), delta_cor.min())) - 1
-    bin_max = int(max(delta_inc.max(), delta_cor.max())) + 2
+    deltas = []
+    if len(incorrect_idx) > 0:
+        e1_inc  = _get_errors(incorrect_idx, 0,  step_empty_correct_count, n_empty)
+        e16_inc = _get_errors(incorrect_idx, 15, step_empty_correct_count, n_empty)
+        delta_inc = e16_inc - e1_inc
+        deltas.append(delta_inc)
+    else:
+        delta_inc = np.array([])
+    if len(correct_idx) > 0:
+        e1_cor  = _get_errors(correct_idx,   0,  step_empty_correct_count, n_empty)
+        e16_cor = _get_errors(correct_idx,   15, step_empty_correct_count, n_empty)
+        delta_cor = e16_cor - e1_cor
+        deltas.append(delta_cor)
+    else:
+        delta_cor = np.array([])
+    if deltas:
+        all_deltas = np.concatenate(deltas)
+        bin_min = int(all_deltas.min()) - 1
+        bin_max = int(all_deltas.max()) + 2
+    else:
+        bin_min, bin_max = -1, 2
     bins = range(bin_min, bin_max)
-    ax.hist(delta_inc, bins=bins, color='salmon', alpha=0.6,
-            edgecolor='black', lw=0.3,
-            label=f'Incorrect (mean={np.mean(delta_inc):.1f})')
-    ax.hist(delta_cor, bins=bins, color='mediumseagreen', alpha=0.6,
-            edgecolor='black', lw=0.3,
-            label=f'Correct (mean={np.mean(delta_cor):.1f})')
+    if len(delta_inc) > 0:
+        ax.hist(delta_inc, bins=bins, color='salmon', alpha=0.6,
+                edgecolor='black', lw=0.3,
+                label=f'Incorrect (mean={np.mean(delta_inc):.1f})')
+    if len(delta_cor) > 0:
+        ax.hist(delta_cor, bins=bins, color='mediumseagreen', alpha=0.6,
+                edgecolor='black', lw=0.3,
+                label=f'Correct (mean={np.mean(delta_cor):.1f})')
     ax.axvline(0, color='black', ls='--', lw=1.2, alpha=0.7, label='no change')
     ax.set_xlabel('Δ error count (Step 16 − Step 1)')
     ax.set_ylabel('Number of puzzles')
@@ -1483,6 +1517,8 @@ def plot_trajectory_heatmap(
                 err = n_cells[i] - int(source[i][t_use])
                 row.append(err)
             trajs.append(row)
+        if not trajs:
+            return np.empty((0, n_steps))
         return np.array(trajs)  # (N, 16)
  
     def spearman_sort(idx_list, step_empty_correct_count, n_empty, n_steps):
@@ -1517,10 +1553,8 @@ def plot_trajectory_heatmap(
             n_improving=n_imp, n_oscillating=n_osc, n_worsening=n_wors,
         )
  
-    global_vmax = np.nanpercentile(
-        np.concatenate([groups["Incorrect"]["trajs"].ravel(),
-                        groups["Correct"]["trajs"].ravel()]), 99
-    )
+    all_vals = np.concatenate([g["trajs"].ravel() for g in groups.values() if g["trajs"].size > 0])
+    global_vmax = np.nanpercentile(all_vals, 99) if all_vals.size > 0 else 1.0
  
     # ── layout ────────────────────────────────────────────────────────────────
     # Width ratio: heatmap_incorrect : heatmap_correct : histogram = 2 : 3 : 2
@@ -1552,7 +1586,11 @@ def plot_trajectory_heatmap(
         n_imp    = g["n_improving"]
         n_osc    = g["n_oscillating"]
         n_wors   = g["n_worsening"]
- 
+
+        if trajs.size == 0:
+            ax.set_title(f'{label}: no puzzles')
+            continue
+
         im = ax.imshow(
             trajs, aspect="auto", cmap=cmap, interpolation="nearest",
             vmin=0, vmax=global_vmax,
@@ -1742,13 +1780,17 @@ def _build_violin_pair(ax, corr_data: dict, incorr_data: dict,
         pos_i.append(pos + 0.4)
         data_c.append(corr_data[s] if corr_data[s] else [np.nan])
         data_i.append(incorr_data[s] if incorr_data[s] else [np.nan])
- 
-    vp_c = ax.violinplot(data_c, positions=pos_c,
-                         showmeans=True, showmedians=False, widths=0.7)
-    vp_i = ax.violinplot(data_i, positions=pos_i,
-                         showmeans=True, showmedians=False, widths=0.7)
-    _style_violin(vp_c, 'green')
-    _style_violin(vp_i, 'red')
+
+    valid_c = [(p, d) for p, d in zip(pos_c, data_c) if len(d) >= 2]
+    valid_i = [(p, d) for p, d in zip(pos_i, data_i) if len(d) >= 2]
+    if valid_c:
+        vp_c = ax.violinplot([d for _, d in valid_c], positions=[p for p, _ in valid_c],
+                             showmeans=True, showmedians=False, widths=0.7)
+        _style_violin(vp_c, 'green')
+    if valid_i:
+        vp_i = ax.violinplot([d for _, d in valid_i], positions=[p for p, _ in valid_i],
+                             showmeans=True, showmedians=False, widths=0.7)
+        _style_violin(vp_i, 'red')
  
     ax.set_xticks([k * 3 for k in range(len(selected_steps))])
     ax.set_xticklabels([f'Step {s}' for s in selected_steps])
