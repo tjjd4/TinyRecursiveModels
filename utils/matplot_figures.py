@@ -1002,127 +1002,140 @@ def _compute_cka_matrix(Z):
     return cka_mat
 
 
-def plot_cka_matrices(all_z, correct_mask, save_dir: str, z_label: str = "z_H"):
+def _imshow_or_nodata(ax, matrix, title, T, tick_labels, **im_kwargs):
+    """Imshow `matrix` on `ax`, or show 'no data' text if matrix is None.
+    Applies shared axis formatting (ticks, labels) in both cases.
     """
-    all_z: (N, T, D) numpy array, mean-pooled over cell positions
-    correct_mask: (N,) bool array
+    if matrix is not None:
+        im = ax.imshow(matrix, **im_kwargs)
+    else:
+        ax.text(0.5, 0.5, 'no data', ha='center', va='center',
+                transform=ax.transAxes, fontsize=14, color='gray')
+        im = None
+    ax.set_title(title, fontsize=11)
+    ax.set_xticks(range(T))
+    ax.set_yticks(range(T))
+    ax.set_xticklabels(tick_labels, fontsize=7)
+    ax.set_yticklabels(tick_labels, fontsize=7)
+    ax.set_xlabel('Step', fontsize=9)
+    ax.set_ylabel('Step', fontsize=9)
+    return im
+
+
+def _split_and_compute_cka(all_z, correct_mask, label):
+    """Split (N, T, D) by correct_mask and compute CKA for each non-empty half.
+    Returns (cka_correct, cka_incorrect, n_correct, n_incorrect).
+    Either CKA matrix is None when the corresponding group is empty.
     """
+    all_z        = np.array(all_z)
+    correct_mask = np.array(correct_mask, dtype=bool)
+    z_correct    = all_z[correct_mask]
+    z_incorrect  = all_z[~correct_mask]
+    print(f"Computing {label} CKA for {z_correct.shape[0]} correct puzzles...")
+    cka_correct   = _compute_cka_matrix(z_correct)   if z_correct.shape[0]   > 0 else None
+    print(f"Computing {label} CKA for {z_incorrect.shape[0]} incorrect puzzles...")
+    cka_incorrect = _compute_cka_matrix(z_incorrect) if z_incorrect.shape[0] > 0 else None
+    return cka_correct, cka_incorrect, z_correct.shape[0], z_incorrect.shape[0]
 
-    all_z = np.array(all_z)           # (N, T, D)
-    correct_mask = np.array(correct_mask, dtype=bool)  # (N,)
 
-    z_correct   = all_z[correct_mask]    # (N_c, T, D)
-    z_incorrect = all_z[~correct_mask]   # (N_i, T, D)
-
-    print(f"Computing CKA for {z_correct.shape[0]} correct puzzles...")
-    cka_correct   = _compute_cka_matrix(z_correct)
-    print(f"Computing CKA for {z_incorrect.shape[0]} incorrect puzzles...")
-    cka_incorrect = _compute_cka_matrix(z_incorrect)
-    diff_matrix   = cka_correct - cka_incorrect
-
-    T = cka_correct.shape[0]
-    tick_labels = [str(i+1) for i in range(T)]
+def _cka_figure(cka_correct, cka_incorrect,
+                title_correct, title_incorrect, suptitle):
+    """Build the shared 3-panel CKA figure (correct | incorrect | diff).
+    Either matrix may be None (empty group) — that panel shows 'no data'.
+    Returns None only if both matrices are None.
+    """
+    ref = cka_correct if cka_correct is not None else cka_incorrect
+    if ref is None:
+        return None
+    T           = ref.shape[0]
+    tick_labels = [str(i + 1) for i in range(T)]
+    diff_matrix = (cka_correct - cka_incorrect) if (cka_correct is not None and cka_incorrect is not None) else None
 
     fig = plt.figure(figsize=(18, 5.5))
     gs  = gridspec.GridSpec(1, 4, width_ratios=[1, 1, 1, 0.05], wspace=0.35)
-
     ax0 = fig.add_subplot(gs[0])
     ax1 = fig.add_subplot(gs[1])
     ax2 = fig.add_subplot(gs[2])
     cax = fig.add_subplot(gs[3])
 
     im_kwargs = dict(vmin=0, vmax=1, cmap='viridis', aspect='auto')
-    diff_max  = np.abs(diff_matrix).max()
+    im0 = _imshow_or_nodata(ax0, cka_correct,   title_correct,   T, tick_labels, **im_kwargs)
+    im1 = _imshow_or_nodata(ax1, cka_incorrect, title_incorrect, T, tick_labels, **im_kwargs)
 
-    im0 = ax0.imshow(cka_correct,   **im_kwargs)
-    im1 = ax1.imshow(cka_incorrect, **im_kwargs)
-    im2 = ax2.imshow(diff_matrix,   vmin=-diff_max, vmax=diff_max,
-                     cmap='RdBu_r', aspect='auto')
+    if diff_matrix is not None:
+        diff_max = np.abs(diff_matrix).max()
+        im2 = ax2.imshow(diff_matrix, vmin=-diff_max, vmax=diff_max, cmap='RdBu_r', aspect='auto')
+        ax2.set_title('Difference (Correct − Incorrect)', fontsize=11)
+        ax2.set_xticks(range(T)); ax2.set_yticks(range(T))
+        ax2.set_xticklabels(tick_labels, fontsize=7); ax2.set_yticklabels(tick_labels, fontsize=7)
+        ax2.set_xlabel('Step', fontsize=9); ax2.set_ylabel('Step', fontsize=9)
+        fig.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04).set_label('ΔCKA', fontsize=8)
+    else:
+        _imshow_or_nodata(ax2, None, 'Difference (Correct − Incorrect)', T, tick_labels)
 
-    for ax, title in zip([ax0, ax1, ax2], [
-        f'{z_label} CKA — Correct (n={z_correct.shape[0]:,})',
-        f'{z_label} CKA — Incorrect (n={z_incorrect.shape[0]:,})',
-        'Difference (Correct − Incorrect)'
-    ]):
-        ax.set_title(title, fontsize=11)
-        ax.set_xticks(range(T))
-        ax.set_yticks(range(T))
-        ax.set_xticklabels(tick_labels, fontsize=7)
-        ax.set_yticklabels(tick_labels, fontsize=7)
-        ax.set_xlabel('Step', fontsize=9)
-        ax.set_ylabel('Step', fontsize=9)
+    im_ref = im0 if im0 is not None else im1
+    if im_ref is not None:
+        plt.colorbar(im_ref, cax=cax, label='CKA')
 
-    # shared colorbar for first two panels
-    plt.colorbar(im0, cax=cax, label='CKA')
-
-    # separate colorbar for diff panel (right side)
-    cbar2 = fig.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
-    cbar2.set_label('ΔCKA', fontsize=8)
-
-    fig.suptitle(f'Linear CKA Inter-Step Similarity: {z_label} Trajectories', 
-                 fontsize=13, y=1.02)
+    fig.suptitle(suptitle, fontsize=13, y=1.02)
     return fig
+
+
+def plot_cka_matrices(all_z, correct_mask, save_dir: str, z_label: str = "z_H"):
+    """all_z: (N, T, D) numpy array, mean-pooled over cell positions"""
+    cka_c, cka_i, n_c, n_i = _split_and_compute_cka(all_z, correct_mask, z_label)
+    return _cka_figure(
+        cka_c, cka_i,
+        f'{z_label} CKA — Correct (n={n_c:,})',
+        f'{z_label} CKA — Incorrect (n={n_i:,})',
+        f'Linear CKA Inter-Step Similarity: {z_label} Trajectories',
+    )
 
 
 def plot_puzzle_emb_cka_matrices(all_z_puzzle_emb, correct_mask, save_dir: str, z_label: str = "z_H"):
-    """
-    all_z: (N, T, D) numpy array, mean-pooled over puzzle_emb positions
-    correct_mask: (N,) bool array
-    """
-    all_z_puzzle_emb = np.array(all_z_puzzle_emb)
-    correct_mask = np.array(correct_mask, dtype=bool)
- 
-    z_correct   = all_z_puzzle_emb[correct_mask]
-    z_incorrect = all_z_puzzle_emb[~correct_mask]
- 
-    print(f"Computing puzzle-emb CKA for {z_correct.shape[0]} correct puzzles...")
-    cka_correct   = _compute_cka_matrix(z_correct)
-    print(f"Computing puzzle-emb CKA for {z_incorrect.shape[0]} incorrect puzzles...")
-    cka_incorrect = _compute_cka_matrix(z_incorrect)
-    diff_matrix   = cka_correct - cka_incorrect
- 
-    T = cka_correct.shape[0]
-    tick_labels = [str(i+1) for i in range(T)]
- 
-    fig = plt.figure(figsize=(18, 5.5))
-    gs  = gridspec.GridSpec(1, 4, width_ratios=[1, 1, 1, 0.05], wspace=0.35)
- 
-    ax0 = fig.add_subplot(gs[0])
-    ax1 = fig.add_subplot(gs[1])
-    ax2 = fig.add_subplot(gs[2])
-    cax = fig.add_subplot(gs[3])
- 
-    im_kwargs = dict(vmin=0, vmax=1, cmap='magma', aspect='auto')
-    diff_max  = np.abs(diff_matrix).max()
- 
-    im0 = ax0.imshow(cka_correct,   **im_kwargs)
-    im1 = ax1.imshow(cka_incorrect, **im_kwargs)
-    im2 = ax2.imshow(diff_matrix,   vmin=-diff_max, vmax=diff_max,
-                     cmap='RdBu_r', aspect='auto')
- 
-    for ax, title in zip([ax0, ax1, ax2], [
-        f'{z_label} Puzzle Emb CKA — Correct (n={z_correct.shape[0]:,})',
-        f'{z_label} Puzzle Emb CKA — Incorrect (n={z_incorrect.shape[0]:,})',
-        'Difference (Correct − Incorrect)'
-    ]):
-        ax.set_title(title, fontsize=11)
-        ax.set_xticks(range(T))
-        ax.set_yticks(range(T))
-        ax.set_xticklabels(tick_labels, fontsize=7)
-        ax.set_yticklabels(tick_labels, fontsize=7)
-        ax.set_xlabel('Step', fontsize=9)
-        ax.set_ylabel('Step', fontsize=9)
- 
-    plt.colorbar(im0, cax=cax, label='CKA')
- 
-    cbar2 = fig.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
-    cbar2.set_label('ΔCKA', fontsize=8)
- 
-    fig.suptitle(
+    """all_z: (N, T, D) numpy array, mean-pooled over puzzle_emb positions"""
+    cka_c, cka_i, n_c, n_i = _split_and_compute_cka(all_z_puzzle_emb, correct_mask, f'{z_label} puzzle-emb')
+    return _cka_figure(
+        cka_c, cka_i,
+        f'{z_label} Puzzle Emb CKA — Correct (n={n_c:,})',
+        f'{z_label} Puzzle Emb CKA — Incorrect (n={n_i:,})',
         f'[E2.5b] Linear CKA Inter-Step Similarity: {z_label} — Puzzle Embedding Tokens',
-        fontsize=13, y=1.02,
     )
-    return fig
+
+
+def plot_halt_cka_matrices(
+    all_z_halt: np.ndarray,
+    correct_mask: np.ndarray,
+    save_dir: str,
+    z_label: str = "z_H",
+):
+    """all_z_halt: (N, T, D) — halt token trajectories (position 0)"""
+    cka_c, cka_i, n_c, n_i = _split_and_compute_cka(all_z_halt, correct_mask, f'{z_label} halt')
+    return _cka_figure(
+        cka_c, cka_i,
+        f'{z_label} Halt CKA — Correct (n={n_c:,})',
+        f'{z_label} Halt CKA — Incorrect (n={n_i:,})',
+        f'[E2.5b] Linear CKA Inter-Step Similarity: {z_label} — Halt Token (pos 0)',
+    )
+
+
+def plot_ctx_cka_matrices(
+    all_z_ctx: Optional[np.ndarray],
+    correct_mask: np.ndarray,
+    save_dir: str,
+    z_label: str = "z_H",
+):
+    """all_z_ctx: (N, T, D) or None — context token trajectories (positions 1+)"""
+    if all_z_ctx is None:
+        print(f"[{z_label}] puzzle_emb_len == 1, no context tokens. Skipping.")
+        return None
+    cka_c, cka_i, n_c, n_i = _split_and_compute_cka(all_z_ctx, correct_mask, f'{z_label} ctx')
+    return _cka_figure(
+        cka_c, cka_i,
+        f'{z_label} Ctx CKA — Correct (n={n_c:,})',
+        f'{z_label} Ctx CKA — Incorrect (n={n_i:,})',
+        f'[E2.5b] Linear CKA Inter-Step Similarity: {z_label} — Context Tokens (pos 1+)',
+    )
 
 
 def _padded_mean_std(indices, data_list, max_T):
@@ -1332,6 +1345,11 @@ def plot_severity(
     n_empty, n_given, correct_flags: List[bool], save_dir: str
 ):
     def _plot_error_hist(ax, errors, color, title, xlabel, show_zero=False):
+        if len(errors) == 0:
+            ax.set_title(f'{title}\n(no data)')
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel('Number of puzzles')
+            return
         max_bin = max(int(errors.max()) + 2, 3)
         ax.hist(errors, bins=range(0, max_bin),
                 color=color, edgecolor='black', alpha=0.8)
@@ -1923,50 +1941,5 @@ def plot_correct_is_top2(
         ax.grid(True, alpha=0.3)
  
     fig.suptitle('E2.1b Fig3: Top-2 Correct Rate (Zoomed)', fontweight='bold')
-    fig.tight_layout()
-    return fig
- 
- 
-# ── Supplementary : Mean Rank Line Plot ─────────────────────
- 
-def plot_correct_answer_rank_mean(
-    step_output_correct_rank: List[np.ndarray],
-    given_masks: List[np.ndarray],
-    correct_flags: List[bool],
-    save_dir: str,
-) -> plt.Figure:
-    """
-    Supplementary: mean correct answer rank (1-9) per step.
-    Two panels: Empty / Given. y-axis inverted (1=top).
-    """
-    correct_idx, incorrect_idx = _split_indices(correct_flags)
-    max_T = max(r.shape[0] for r in step_output_correct_rank)
-    steps = np.arange(1, max_T + 1)
- 
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
- 
-    for ax, (cell_label, mask_fn) in zip(axes, [
-        ('Empty Cells', lambda gm: ~gm),
-        ('Given Cells', lambda gm: gm),
-    ]):
-        for indices, color, label in [
-            (correct_idx, 'g', 'Correct'),
-            (incorrect_idx, 'r', 'Incorrect'),
-        ]:
-            mean_curve = _rank_per_step_mean(
-                indices, step_output_correct_rank, given_masks,
-                mask_fn, max_T)
-            ax.plot(steps, mean_curve, f'{color}-o', ms=4, label=label)
- 
-        ax.set_title(f'Mean Rank of Correct Answer — {cell_label}')
-        ax.set_xlabel('Supervision Step')
-        ax.set_ylabel('Mean Rank (1=best, 9=worst)')
-        ax.set_xticks(steps)
-        ax.set_ylim(0.5, 9.5)
-        ax.invert_yaxis()
-        ax.legend(fontsize=9)
-        ax.grid(True, alpha=0.3)
- 
-    fig.suptitle('E2.1b Supplementary: Mean Correct Answer Rank', fontweight='bold')
     fig.tight_layout()
     return fig

@@ -60,6 +60,20 @@ load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t
 +run_name=${run_name}
 ```
 
+#### Random Weight
+
+```bash
+run_name="z_analysis_random_weight_mlp_t_sudoku_44"
+python z_analysis.py \
+arch=trm_random_trace \
+data_paths="[data/sudoku-extreme-1k-aug-1000]" \
+evaluators="[]" \
+arch.mlp_t=True arch.pos_encodings=none \
+arch.L_layers=2 \
+arch.H_cycles=3 arch.L_cycles=6 \
++run_name=${run_name}
+```
+
 #### Data only correct or incorrect
 
 ```bash

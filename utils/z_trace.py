@@ -5,6 +5,7 @@ from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch._dynamo
+import ml_dtypes
 
 from utils.math import logit_entropy
 
@@ -71,8 +72,12 @@ class ZTrace:
         # step level trajectories
         self.trajectories = []
         self.z_L_trajectories = []
-        self.z_H_puzzle_emb_trajs = []
-        self.z_L_puzzle_emb_trajs = []
+        # self.z_H_puzzle_emb_trajs = []
+        # self.z_L_puzzle_emb_trajs = []
+        self.z_H_halt_trajs = []
+        self.z_L_halt_trajs = []
+        self.z_H_ctx_trajs = []
+        self.z_L_ctx_trajs = []
         self.correct_flags = []
         self.ratings = []
         self.given_masks = []
@@ -226,12 +231,17 @@ class ZTrace:
         if n_steps != self.halt_max_steps:
             print(f"[ZTrace] WARNING: n_steps={n_steps} != halt_max_steps={self.halt_max_steps}")
 
-        step_z_H_np = torch.stack(self._step_z_H).cpu().float().numpy()  # (n_steps, B, L, D)
-        step_z_L_np = torch.stack(self._step_z_L).cpu().float().numpy()  # (n_steps, B, L, D)
         step_preds_np = torch.stack(self._step_preds).cpu().numpy()  # (n_steps, B, seq_len)
         step_z_L_preds_np = torch.stack(self._step_z_L_preds).cpu().numpy()  # (n_steps, B, seq_len)
-        step_z_H_ent_np = torch.stack(self._step_z_H_entropy).cpu().float().numpy()  # (n_steps, B, seq_len)
-        step_z_L_ent_np = torch.stack(self._step_z_L_entropy).cpu().float().numpy()  # (n_steps, B, seq_len)
+
+        step_z_H_t = torch.stack(self._step_z_H).cpu()
+        step_z_H_np = step_z_H_t.view(torch.int16).numpy().view(ml_dtypes.bfloat16)  # (n_steps, B, seq_len, D)
+        step_z_L_t = torch.stack(self._step_z_L).cpu()
+        step_z_L_np = step_z_L_t.view(torch.int16).numpy().view(ml_dtypes.bfloat16)  # (n_steps, B, seq_len, D)
+        step_z_H_ent_t = torch.stack(self._step_z_H_entropy).cpu()
+        step_z_H_ent_np = step_z_H_ent_t.view(torch.int16).numpy().view(ml_dtypes.bfloat16)  # (n_steps, B, seq_len)
+        step_z_L_ent_t = torch.stack(self._step_z_L_entropy).cpu()
+        step_z_L_ent_np = step_z_L_ent_t.view(torch.int16).numpy().view(ml_dtypes.bfloat16)  # (n_steps, B, seq_len)
 
         # top 2 probs and idx
         step_top2_probs_np = torch.stack(self._step_output_top2_probs).cpu().float().numpy()
@@ -244,12 +254,6 @@ class ZTrace:
         else:
             rec_z_H_np = None
             rec_z_L_np = None
-
-        self._step_z_H.clear()
-        self._step_z_L.clear()
-        self._step_preds.clear()
-        self._rec_z_H.clear()
-        self._rec_z_L.clear()
 
         B = batch_inputs_np.shape[0]
         mask = (labels_np != -100)
@@ -277,10 +281,9 @@ class ZTrace:
             L = z_H_last.shape[-2]
 
             cell_start = self.puzzle_emb_len  # TRM: 16, HRM: 1
-            cell_end = self.puzzle_emb_len + 81
 
-            z_H_cell = z_H_last[:, cell_start:cell_end, :]   # (T_actual, 81, D)
-            z_L_cell = z_L_last[:, cell_start:cell_end, :]   # (T_actual, 81, D)
+            z_H_cell = z_H_last[:, cell_start:, :]   # (T_actual, 81, D)
+            z_L_cell = z_L_last[:, cell_start:, :]   # (T_actual, 81, D)
 
             z_H_puzzle_emb = z_H_last[:, 0:cell_start, :]   # (T_actual, puzzle_emb_len, D)
             z_L_puzzle_emb = z_L_last[:, 0:cell_start, :]   # (T_actual, puzzle_emb_len, D)
@@ -288,8 +291,12 @@ class ZTrace:
             # mean-pool over sequence positions → (T_actual, D)
             z_H_cell_traj = z_H_cell.mean(axis=1)
             z_L_cell_traj = z_L_cell.mean(axis=1)
-            z_H_puzzle_emb_traj = z_H_puzzle_emb.mean(axis=1)
-            z_L_puzzle_emb_traj = z_L_puzzle_emb.mean(axis=1)
+            # z_H_puzzle_emb_traj = z_H_puzzle_emb.mean(axis=1)
+            # z_L_puzzle_emb_traj = z_L_puzzle_emb.mean(axis=1)
+            z_H_halt_traj = z_H_puzzle_emb[:, 0, :].copy()         # (T_actual, D)
+            z_L_halt_traj = z_L_puzzle_emb[:, 0, :].copy()         # (T_actual, D)
+            z_H_ctx_traj = z_H_puzzle_emb[:, 1:, :].mean(axis=1)  # (T_actual, D)
+            z_L_ctx_traj = z_L_puzzle_emb[:, 1:, :].mean(axis=1)  # (T_actual, D)
 
             # given mask from first 81 cell tokens
             given = batch_inputs_np[b, :] != 1  # (81,)
@@ -420,8 +427,12 @@ class ZTrace:
 
             self.trajectories.append(z_H_cell_traj)
             self.z_L_trajectories.append(z_L_cell_traj)
-            self.z_H_puzzle_emb_trajs.append(z_H_puzzle_emb_traj)
-            self.z_L_puzzle_emb_trajs.append(z_L_puzzle_emb_traj)
+            # self.z_H_puzzle_emb_trajs.append(z_H_puzzle_emb_traj)
+            # self.z_L_puzzle_emb_trajs.append(z_L_puzzle_emb_traj)
+            self.z_H_halt_trajs.append(z_H_halt_traj)
+            self.z_L_halt_trajs.append(z_L_halt_traj)
+            self.z_H_ctx_trajs.append(z_H_ctx_traj)
+            self.z_L_ctx_trajs.append(z_L_ctx_traj)
             self.correct_flags.append(is_correct)
             self.ratings.append(rating)
             self.given_masks.append(given)
@@ -474,8 +485,8 @@ class ZTrace:
             if not self.is_all_trace_collected and rec_z_H_np is not None:
                 # rec_z_H_np shape: (n_steps * H_cycles, B, L, D)
                 # rec_z_L_np shape: (n_steps * L_cycles * H_cycles, B, L, D)
-                rec_H = np.stack([rec_z_H_np[t * self.H_cycles : t * self.H_cycles + self.H_cycles, b, cell_start:cell_end, :] for t in range(T_actual)])  # (T_actual, H_cycles, L, D)
-                rec_L = np.stack([rec_z_L_np[t * self.L_cycles * self.H_cycles : t * self.L_cycles * self.H_cycles + self.L_cycles * self.H_cycles, b, cell_start:cell_end, :] for t in range(T_actual)])  # (T_actual, L_cycles * H_cycles, L, D)
+                rec_H = np.stack([rec_z_H_np[t * self.H_cycles : t * self.H_cycles + self.H_cycles, b, cell_start:, :] for t in range(T_actual)])  # (T_actual, H_cycles, L, D)
+                rec_L = np.stack([rec_z_L_np[t * self.L_cycles * self.H_cycles : t * self.L_cycles * self.H_cycles + self.L_cycles * self.H_cycles, b, cell_start:, :] for t in range(T_actual)])  # (T_actual, L_cycles * H_cycles, L, D)
 
                 self.rec_z_H.append(rec_H)
                 self.rec_z_L.append(rec_L)
@@ -486,6 +497,13 @@ class ZTrace:
                     self._rec_n_correct += 1
                 else:
                     self._rec_n_incorrect += 1
+
+        del step_z_H_np, step_z_L_np
+        del step_preds_np, step_z_L_preds_np
+        del step_z_H_ent_np, step_z_L_ent_np
+        del step_top2_probs_np, step_argsort_np
+        if rec_z_H_np is not None:
+            del rec_z_H_np, rec_z_L_np
 
         self.clear_batch_buffers()
 
@@ -541,4 +559,3 @@ class ZTrace:
             n_min = int((r == r_min).sum())
             acc = float(f[r == r_min].mean())
             print(f"rating_min={r_min} | accuracy@min={acc:.3f} (n={n_min})")
-        return ok

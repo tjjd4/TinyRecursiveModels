@@ -18,5 +18,9 @@ pydantic-core
 huggingface_hub 
 numba
 triton
+
+# Analysis
 scikit-learn
 matplotlib
+ml_dtypes
+psutil

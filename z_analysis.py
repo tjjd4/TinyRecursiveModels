@@ -25,7 +25,7 @@ from omegaconf import DictConfig
 
 from puzzle_dataset_with_rating import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
 from utils.functions import load_model_class, get_model_source_path, load_checkpoint_from_path
-from utils.matplot_figures import plot_pca_split, plot_pca_combined, plot_forward_residual, plot_pca_variance, plot_displacement_hist, plot_init_to_final_split, plot_pos_residual_heatmap_given, plot_pos_residual_heatmap_empty, plot_pos_residual_by_step, plot_rating_distribution, plot_residual_vs_rating, plot_accuracy_vs_rating, plot_residual_by_rating_colormap, plot_recursion_residual, plot_pred_stability, plot_logit_lens_accuracy, plot_disagreement, plot_cosine_similarity, plot_cka_matrices, plot_puzzle_emb_cka_matrices, plot_violation_curve, plot_difficulty_stratification, plot_logit_lens_entropy, plot_severity, plot_recursion_effect, plot_trajectory_heatmap, plot_cdf, plot_top1_prob, plot_margin, plot_correct_answer_rank_histogram, plot_correct_is_top2
+from utils.matplot_figures import plot_pca_split, plot_pca_combined, plot_forward_residual, plot_pca_variance, plot_displacement_hist, plot_init_to_final_split, plot_pos_residual_heatmap_given, plot_pos_residual_heatmap_empty, plot_pos_residual_by_step, plot_rating_distribution, plot_residual_vs_rating, plot_accuracy_vs_rating, plot_residual_by_rating_colormap, plot_recursion_residual, plot_pred_stability, plot_logit_lens_accuracy, plot_disagreement, plot_cosine_similarity, plot_cka_matrices, plot_puzzle_emb_cka_matrices, plot_halt_cka_matrices, plot_ctx_cka_matrices, plot_violation_curve, plot_difficulty_stratification, plot_logit_lens_entropy, plot_severity, plot_recursion_effect, plot_trajectory_heatmap, plot_cdf, plot_top1_prob, plot_margin, plot_correct_answer_rank_histogram, plot_correct_is_top2
 
 from models.losses.loss_fn import IGNORE_LABEL_ID
 from utils.z_trace import ZTrace
@@ -142,8 +142,9 @@ def load_model_from_checkpoint(config: TraceConfig, metadata: PuzzleDatasetMetad
 
         # Load checkpoint
         if not os.path.exists(config.load_checkpoint):
-            raise FileNotFoundError(f"Checkpoint not found: {config.load_checkpoint}")
-        if rank == 0:
+            # raise FileNotFoundError(f"Checkpoint not found: {config.load_checkpoint}")
+            print("using random weights")
+        elif rank == 0:
             load_checkpoint(model, config)
 
         # Broadcast parameters from rank 0
@@ -293,10 +294,13 @@ def run_z_analysis(
     all_z_H_trajs_sub = np.concatenate(sub_trajs, axis=0)
     all_z_L_trajs_sub = np.concatenate(sub_z_L_trajs, axis=0)
 
-    cov_z_H = np.cov(all_z_H_trajs_full, rowvar=False)
+    z_H_step16 = np.stack([traj[-1] for traj in trajs], axis=0)  # (N_puzzles, D)
+    z_L_step16 = np.stack([traj[-1] for traj in z_L_trajs], axis=0)
+
+    cov_z_H = np.cov(z_H_step16, rowvar=False)
     pr_z_H = float((np.trace(cov_z_H)**2) / np.trace(cov_z_H.dot(cov_z_H)))
     del cov_z_H
-    cov_z_L = np.cov(all_z_L_trajs_full, rowvar=False)
+    cov_z_L = np.cov(z_L_step16, rowvar=False)
     pr_z_L = float((np.trace(cov_z_L)**2) / np.trace(cov_z_L.dot(cov_z_L)))
     del cov_z_L
 
@@ -328,8 +332,8 @@ def run_z_analysis(
     wandb_log["z_analysis/accuracy"]        = n_correct / n if n > 0 else 0.0
     wandb_log["z_analysis/hinit_pc1"] = float(proj_hinit_single[0, 0])
     wandb_log["z_analysis/hinit_pc2"] = float(proj_hinit_single[0, 1])
-    wandb_log["z_analysis/pca_pr_z_H"] = pr_z_H
-    wandb_log["z_analysis/pca_pr_z_L"] = pr_z_L
+    wandb_log["z_analysis/pr_z_H"] = pr_z_H
+    wandb_log["z_analysis/pr_z_L"] = pr_z_L
     wandb_log["z_analysis/pca_pc1_var_pct"] = float(pca.explained_variance_ratio_[0] * 100)
     wandb_log["z_analysis/pca_pc2_var_pct"] = float(pca.explained_variance_ratio_[1] * 100)
     wandb_log["z_analysis/pca_top2_cumvar_pct"] = float(
@@ -406,9 +410,13 @@ def run_z_analysis(
     # CKA matrices
     wandb_log["z_analysis/cka_matrices"] = _save_wandb(plot_cka_matrices(collector.trajectories, collector.correct_flags, save_dir, z_label="z_H"), save_dir, "cka_matrices.png")
     wandb_log["z_analysis/cka_matrices_z_L"] = _save_wandb(plot_cka_matrices(collector.z_L_trajectories, collector.correct_flags, save_dir, z_label="z_L"), save_dir, "cka_matrices_z_L.png")
-    wandb_log["z_analysis/cka_matrices_puzzle_emb"] = _save_wandb(plot_puzzle_emb_cka_matrices(collector.z_H_puzzle_emb_trajs, collector.correct_flags, save_dir, z_label="z_H"), save_dir, "cka_matrices_puzzle_emb.png")
-    wandb_log["z_analysis/cka_matrices_z_L_puzzle_emb"] = _save_wandb(plot_puzzle_emb_cka_matrices(collector.z_L_puzzle_emb_trajs, collector.correct_flags, save_dir, z_label="z_L"), save_dir, "cka_matrices_z_L_puzzle_emb.png")
-
+    # wandb_log["z_analysis/cka_matrices_puzzle_emb"] = _save_wandb(plot_puzzle_emb_cka_matrices(collector.z_H_puzzle_emb_trajs, collector.correct_flags, save_dir, z_label="z_H"), save_dir, "cka_matrices_puzzle_emb.png")
+    # wandb_log["z_analysis/cka_matrices_z_L_puzzle_emb"] = _save_wandb(plot_puzzle_emb_cka_matrices(collector.z_L_puzzle_emb_trajs, collector.correct_flags, save_dir, z_label="z_L"), save_dir, "cka_matrices_z_L_puzzle_emb.png")
+    wandb_log["z_analysis/cka_matrices_halt"] = _save_wandb(plot_halt_cka_matrices(collector.z_H_halt_trajs, collector.correct_flags, save_dir, z_label="z_H"), save_dir, "cka_matrices_halt.png")
+    wandb_log["z_analysis/cka_matrices_z_L_halt"] = _save_wandb(plot_halt_cka_matrices(collector.z_L_halt_trajs, collector.correct_flags, save_dir, z_label="z_L"), save_dir, "cka_matrices_z_L_halt.png")
+    wandb_log["z_analysis/cka_matrices_ctx"] = _save_wandb(plot_ctx_cka_matrices(collector.z_H_ctx_trajs, collector.correct_flags, save_dir, z_label="z_H"), save_dir, "cka_matrices_ctx.png")
+    wandb_log["z_analysis/cka_matrices_z_L_ctx"] = _save_wandb(plot_ctx_cka_matrices(collector.z_L_ctx_trajs, collector.correct_flags, save_dir, z_label="z_L"), save_dir, "cka_matrices_z_L_ctx.png")
+    
     # Violation curve
     wandb_log["z_analysis/violation_curve"] = _save_wandb(plot_violation_curve(collector.step_preds_all, collector.given_masks, collector.ratings, collector.correct_flags, save_dir), save_dir, "violation_curve.png")
 
