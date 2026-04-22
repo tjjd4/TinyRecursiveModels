@@ -190,6 +190,15 @@ load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t
 +num_runs=5
 ```
 
+### Compute Degradation Rate
+
+```bash
+python scripts/compute_degradation_rate.py \
+--baseline   checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_44/z_analysis_step_0/z_raw.npz \
+--ablation_A checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_per_H_cycle_44/z_analysis_step_0/z_raw.npz \
+--ablation_B checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_per_step_44/z_analysis_step_0/z_raw.npz
+```
+
 ## TRM Pretrain Experiments
 
 ### Sudoku-Extreme (assuming 1 L40S GPU):
