@@ -101,6 +101,9 @@ class ZTrace:
         self.step_given_correct_count = []
         self.step_empty_correct_count = []
 
+        # first time predicts all valid cells correctly
+        self.step_first_correct = []
+
         # z_H logit lens
         self.step_cell_acc = []
         self.step_empty_acc = []
@@ -340,6 +343,12 @@ class ZTrace:
                     stable_step = k+1
                 else:
                     break
+
+            first_correct_step = T_actual  # default
+            for k in range(T_actual):
+                if cell_correct_count[k] >= n_valid:
+                    first_correct_step = k + 1
+                    break
             
             # z_L logit lens
             sample_z_L_preds = step_z_L_preds_np[:T_actual, b, :]  # (T_actual, 81)
@@ -449,6 +458,7 @@ class ZTrace:
             self.step_empty_acc.append(empty_acc)
             self.step_given_acc.append(given_acc)
             self.step_pred_stable.append(stable_step)
+            self.step_first_correct.append(first_correct_step)
             self.step_preds_all.append(sample_step_preds.astype(np.int16))
             self.step_z_L_cell_acc.append(z_L_cell_acc)
             self.step_z_L_empty_acc.append(z_L_empty_acc)
@@ -520,6 +530,7 @@ class ZTrace:
             "pos_residuals": len(self.pos_residuals),
             "step_cell_acc": len(self.step_cell_acc),
             "step_pred_stable": len(self.step_pred_stable),
+            "step_first_correct": len(self.step_first_correct),
             "step_z_L_cell_acc": len(self.step_z_L_cell_acc),
             "step_empty_agree_correct": len(self.step_empty_agree_correct),
             "step_empty_both_wrong_same": len(self.step_empty_both_wrong_same),

@@ -797,33 +797,71 @@ def plot_recursion_residual(
     return fig
 
 
-def plot_pred_stability(step_pred_stable, correct_flags: List[bool], save_dir: str):
-    """Histogram of 'stable match' step, split by correct/incorrect."""
-    fig, ax = plt.subplots(figsize=(8, 5))
-    
-    correct_stable = [step_pred_stable[i] 
-                      for i, f in enumerate(correct_flags) if f]
-    incorrect_stable = [step_pred_stable[i] 
-                        for i, f in enumerate(correct_flags) if not f]
-    
-    max_T = max(step_pred_stable) + 1 if step_pred_stable else 16
-    bins = np.arange(0, max_T + 1) - 0.5
-    
-    if correct_stable:
-        ax.hist(correct_stable, bins=bins, alpha=0.6, color='green',
-                label=f'Correct (n={len(correct_stable)}, mean={np.mean(correct_stable):.1f})', density=True)
-    if incorrect_stable:
-        ax.hist(incorrect_stable, bins=bins, alpha=0.6, color='red',
-                label=f'Incorrect (n={len(incorrect_stable)}, mean={np.mean(incorrect_stable):.1f})', density=True)
+def plot_early_stopping_analysis(
+    step_pred_stable,
+    step_first_correct,
+    correct_flags: List[bool],
+) -> plt.Figure:
+    correct_stable   = [step_pred_stable[i]   for i, f in enumerate(correct_flags) if f]
+    incorrect_stable = [step_pred_stable[i]   for i, f in enumerate(correct_flags) if not f]
+    correct_first    = [step_first_correct[i] for i, f in enumerate(correct_flags) if f]
+    incorrect_first  = [step_first_correct[i] for i, f in enumerate(correct_flags) if not f]
+    gaps             = [step_pred_stable[i] - step_first_correct[i]
+                        for i, f in enumerate(correct_flags) if f]
+
+    max_T   = max(max(step_pred_stable), max(step_first_correct)) + 1
+    t_bins  = np.arange(0, max_T + 1) - 0.5
+
+    max_gap  = max(gaps) if gaps else 0
+    gap_bins = np.arange(-0.5, max_gap + 1.5, 1.0)
+
+    gap_0_pct   = 100 * sum(g == 0 for g in gaps) / len(gaps)
+    gap_pos_pct = 100 * sum(g > 0  for g in gaps) / len(gaps)
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+    # Prediction Stability
+    ax = axes[0]
+    ax.hist(correct_stable,   bins=t_bins, alpha=0.6, color='green', density=True,
+            label=f'Correct (n={len(correct_stable)}, mean={np.mean(correct_stable):.1f})')
+    ax.hist(incorrect_stable, bins=t_bins, alpha=0.6, color='red',   density=True,
+            label=f'Incorrect (n={len(incorrect_stable)}, mean={np.mean(incorrect_stable):.1f})')
     ax.set_xlabel('Stable Match Step (prediction stops changing)')
     ax.set_ylabel('Density')
-    ax.set_title('Prediction Stability (Early Stopping Analysis)')
+    ax.set_title('Prediction Stability')
     ax.set_xticks(np.arange(1, max_T))
     ax.legend()
     ax.grid(True, alpha=0.3)
-    
+
+    # First Correct Step
+    ax = axes[1]
+    ax.hist(correct_first,   bins=t_bins, alpha=0.6, color='green', density=True,
+            label=f'Correct (n={len(correct_first)}, mean={np.mean(correct_first):.1f})')
+    ax.hist(incorrect_first, bins=t_bins, alpha=0.6, color='red',   density=True,
+            label=f'Incorrect (n={len(incorrect_first)}, mean={np.mean(incorrect_first):.1f})')
+    ax.set_xlabel('First Correct Prediction Step')
+    ax.set_ylabel('Density')
+    ax.set_title('First Correct Step')
+    ax.set_xticks(np.arange(1, max_T))
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # Consolidation Gap
+    ax = axes[2]
+    ax.hist(gaps, bins=gap_bins, alpha=0.7, color='steelblue', density=True,
+            label=(f'Correct only (n={len(gaps)}, mean={np.mean(gaps):.2f})\n'
+                   f'gap=0: {gap_0_pct:.1f}%  |  gap>0: {gap_pos_pct:.1f}%'))
+    ax.set_xlabel('Gap = stable_step − first_correct_step')
+    ax.set_ylabel('Density')
+    ax.set_title('Consolidation Gap (correct puzzles only)')
+    ax.set_xticks(np.arange(0, max_gap + 1))
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    fig.suptitle('Early Stopping Analysis (E2.1 / E2.6b)', fontsize=13, y=1.02)
     fig.tight_layout()
     return fig
+
 
 def _padded_mean(indices, acc_list, max_T):
     if len(indices) == 0:

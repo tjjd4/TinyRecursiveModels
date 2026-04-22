@@ -25,7 +25,7 @@ from omegaconf import DictConfig
 
 from puzzle_dataset_with_rating import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
 from utils.functions import load_model_class, get_model_source_path, load_checkpoint_from_path
-from utils.matplot_figures import plot_pca_split, plot_pca_combined, plot_forward_residual, plot_pca_variance, plot_displacement_hist, plot_init_to_final_split, plot_pos_residual_heatmap_given, plot_pos_residual_heatmap_empty, plot_pos_residual_by_step, plot_rating_distribution, plot_residual_vs_rating, plot_accuracy_vs_rating, plot_residual_by_rating_colormap, plot_recursion_residual, plot_pred_stability, plot_logit_lens_accuracy, plot_disagreement, plot_cosine_similarity, plot_cka_matrices, plot_puzzle_emb_cka_matrices, plot_halt_cka_matrices, plot_ctx_cka_matrices, plot_violation_curve, plot_difficulty_stratification, plot_logit_lens_entropy, plot_severity, plot_recursion_effect, plot_trajectory_heatmap, plot_cdf, plot_top1_prob, plot_margin, plot_correct_answer_rank_histogram, plot_correct_is_top2
+from utils.matplot_figures import plot_pca_split, plot_pca_combined, plot_forward_residual, plot_pca_variance, plot_displacement_hist, plot_init_to_final_split, plot_pos_residual_heatmap_given, plot_pos_residual_heatmap_empty, plot_pos_residual_by_step, plot_rating_distribution, plot_residual_vs_rating, plot_accuracy_vs_rating, plot_residual_by_rating_colormap, plot_recursion_residual, plot_early_stopping_analysis, plot_logit_lens_accuracy, plot_disagreement, plot_cosine_similarity, plot_cka_matrices, plot_puzzle_emb_cka_matrices, plot_halt_cka_matrices, plot_ctx_cka_matrices, plot_violation_curve, plot_difficulty_stratification, plot_logit_lens_entropy, plot_severity, plot_recursion_effect, plot_trajectory_heatmap, plot_cdf, plot_top1_prob, plot_margin, plot_correct_answer_rank_histogram, plot_correct_is_top2
 
 from models.losses.loss_fn import IGNORE_LABEL_ID
 from utils.z_trace import ZTrace
@@ -397,7 +397,7 @@ def run_z_analysis(
     wandb_log["z_analysis/z_L_displacement_hist"] = _save_wandb(plot_displacement_hist(collector.z_L_trajectories, collector.correct_flags, save_dir, z_label="z_L"), save_dir, "z_L_displacement_histogram.png")
     wandb_log["z_analysis/z_L_pca_init_to_final"] = _save_wandb(plot_init_to_final_split(proj_inits_L, proj_z_L, sample_ids, sub_flags, pca_L, save_dir, z_label="z_L"), save_dir, "z_L_pca_init_to_final.png")
 
-    wandb_log["z_analysis/pred_stability_hist"] = _save_wandb(plot_pred_stability(collector.step_pred_stable, collector.correct_flags, save_dir), save_dir, "pred_stability_hist.png")
+    wandb_log["z_analysis/early_stopping_analysis"] = _save_wandb(plot_early_stopping_analysis(step_pred_stable=collector.step_pred_stable,step_first_correct=collector.step_first_correct,correct_flags=collector.correct_flags,),save_dir,"early_stopping_analysis.png")
 
     # Logit lens
     wandb_log["z_analysis/z_H_logit_lens_accuracy"] = _save_wandb(plot_logit_lens_accuracy(collector.step_cell_acc, collector.step_empty_acc, collector.step_given_acc, collector.correct_flags, save_dir, z_label="z_H"), save_dir, "logit_lens_accuracy.png")
