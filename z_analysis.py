@@ -25,7 +25,7 @@ from omegaconf import DictConfig
 
 from puzzle_dataset_with_rating import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
 from utils.functions import load_model_class, get_model_source_path, load_checkpoint_from_path
-from utils.matplot_figures import plot_pca_split, plot_pca_combined, plot_forward_residual, plot_pca_variance, plot_displacement_hist, plot_init_to_final_split, plot_pos_residual_heatmap_given, plot_pos_residual_heatmap_empty, plot_pos_residual_by_step, plot_rating_distribution, plot_residual_vs_rating, plot_accuracy_vs_rating, plot_residual_by_rating_colormap, plot_recursion_residual, plot_early_stopping_analysis, plot_logit_lens_accuracy, plot_disagreement, plot_cosine_similarity, plot_cka_matrices, plot_puzzle_emb_cka_matrices, plot_halt_cka_matrices, plot_ctx_cka_matrices, plot_violation_curve, plot_difficulty_stratification, plot_logit_lens_entropy, plot_severity, plot_recursion_effect, plot_trajectory_heatmap, plot_cdf, plot_top1_prob, plot_margin, plot_correct_answer_rank_histogram, plot_correct_is_top2
+from utils.matplot_figures import plot_pca_split, plot_pca_combined, plot_forward_residual, plot_pca_variance, plot_displacement_hist, plot_init_to_final_split, plot_pos_residual_heatmap_given, plot_pos_residual_heatmap_empty, plot_pos_residual_by_step, plot_rating_distribution, plot_residual_vs_rating, plot_accuracy_vs_rating, plot_residual_by_rating_colormap, plot_recursion_residual, plot_early_stopping_analysis, plot_logit_lens_accuracy, plot_disagreement, plot_cosine_similarity, plot_cka_matrices, plot_puzzle_emb_cka_matrices, plot_halt_cka_matrices, plot_ctx_cka_matrices, plot_violation_curve, plot_difficulty_stratification, plot_logit_lens_entropy, plot_severity, plot_recursion_effect, plot_trajectory_heatmap, plot_cdf, plot_top1_prob, plot_margin, plot_correct_answer_rank_histogram, plot_correct_is_top2, plot_empty_cell_error_count_distribution
 
 from models.losses.loss_fn import IGNORE_LABEL_ID
 from utils.z_trace import ZTrace
@@ -434,6 +434,9 @@ def run_z_analysis(
     wandb_log["z_analysis/margin_violin"] = _save_wandb(plot_margin(collector.step_output_empty_margin, collector.step_output_given_margin, collector.correct_flags, save_dir), save_dir, "margin_violin.png")
     wandb_log["z_analysis/correct_answer_rank_histogram"] = _save_wandb(plot_correct_answer_rank_histogram(collector.step_output_correct_rank, collector.given_masks, collector.correct_flags, save_dir), save_dir, "correct_answer_rank_histogram.png")
     wandb_log["z_analysis/correct_is_top2"] = _save_wandb(plot_correct_is_top2(collector.step_output_correct_rank, collector.given_masks, collector.correct_flags, save_dir), save_dir, "correct_is_top2.png")
+
+    # Empty cell error count distribution
+    wandb_log["z_analysis/empty_cell_error_count_distribution"] = _save_wandb(plot_empty_cell_error_count_distribution(collector.empty_error_step_count, collector.correct_flags, save_dir), save_dir, "empty_cell_error_count_distribution.png")
 
     # Rating-based plots
     if collector.ratings:

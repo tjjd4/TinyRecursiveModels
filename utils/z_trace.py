@@ -101,6 +101,9 @@ class ZTrace:
         self.step_given_correct_count = []
         self.step_empty_correct_count = []
 
+        # how many steps the empty cell is in error state
+        self.empty_error_step_count = []
+
         # first time predicts all valid cells correctly
         self.step_first_correct = []
 
@@ -335,6 +338,8 @@ class ZTrace:
             given_acc = given_correct_count / max(n_given, 1)
             empty_acc = empty_correct_count / max(n_empty, 1)
 
+            empty_error_step_count = (~per_step_correct[:, empty]).sum(axis=0).astype(np.int8)
+
             # prediction stability: start from the last step and go backwards, the earliest step that makes the prediction no longer change
             stable_step = T_actual
             final_pred = sample_step_preds[-1]
@@ -457,6 +462,7 @@ class ZTrace:
             self.step_cell_acc.append(cell_acc)
             self.step_empty_acc.append(empty_acc)
             self.step_given_acc.append(given_acc)
+            self.empty_error_step_count.append(empty_error_step_count)
             self.step_pred_stable.append(stable_step)
             self.step_first_correct.append(first_correct_step)
             self.step_preds_all.append(sample_step_preds.astype(np.int16))

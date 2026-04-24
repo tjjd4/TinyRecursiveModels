@@ -2023,3 +2023,57 @@ def plot_correct_is_top2(
     fig.suptitle('E2.1b Fig3: Top-2 Correct Rate (Zoomed)', fontweight='bold')
     fig.tight_layout()
     return fig
+
+
+def plot_empty_cell_error_count_distribution(
+    empty_error_step_count: List[np.ndarray],
+    correct_flags: List[bool],
+    save_dir: str,
+    T_actual: int = 16,
+) -> plt.Figure:
+    _, incorrect_idx = _split_indices(correct_flags)
+
+    all_counts = np.concatenate([
+        empty_error_step_count[i] for i in incorrect_idx
+    ])  # (N_cells_total,)
+
+    bins = np.arange(0, T_actual + 2) - 0.5
+    counts, _ = np.histogram(all_counts, bins=bins)
+    xs = np.arange(0, T_actual + 1)
+    props = counts / max(counts.sum(), 1)
+
+    colors = np.where(
+        xs == 0, '#2ca02c',
+        np.where(xs == T_actual, '#d62728', '#aec7e8')
+    )
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    ax.bar(xs, props, color=colors, edgecolor='white', linewidth=0.4, width=0.85)
+
+    for x, label, color in [
+        (0, 'never-wrong', '#2ca02c'),
+        (T_actual, 'persistent', '#d62728'),
+    ]:
+        ax.text(
+            x, props[x] + 0.002,
+            f'{props[x]*100:.1f}%',
+            ha='center', va='bottom', fontsize=8,
+            fontweight='bold', color=color,
+        )
+
+    ax.set_xticks([0, 4, 8, 12, 16])
+    ax.set_xticklabels(['0\n(never-wrong)', '4', '8', '12', '16\n(persistent)'])
+    ax.set_xlabel('Error count (steps cell is wrong out of 16)')
+    ax.set_ylabel('Proportion of empty cells')
+    ax.set_title('E2.6c Fig1: Per-cell Error Count Distribution (Incorrect Puzzles)',
+                 fontweight='bold')
+    ax.grid(True, alpha=0.3, axis='y')
+    ax.legend(handles=[
+        Patch(facecolor='#2ca02c', label='never-wrong (error=0)'),
+        Patch(facecolor='#aec7e8', label=f'transient (0 < error < {T_actual})'),
+        Patch(facecolor='#d62728', label=f'persistent (error={T_actual})'),
+    ], fontsize=8, frameon=False)
+
+    fig.tight_layout()
+    return fig
