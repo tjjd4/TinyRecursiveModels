@@ -26,6 +26,9 @@ puzzle_emb_len: 16 # if non-zero, its specified to this value
 no_ACT_continue: True # No continue ACT loss, only use the sigmoid of the halt which makes much more sense
 
 reset_z_L_per_step: False  # Reset z_L to L_init once at the start of step
-reset_z_L_per_H_cycle: True   # Reset z_L to L_init at the start of each H_cycle
+reset_z_L_per_H_cycle: False   # Reset z_L to L_init at the start of each H_cycle
 reset_z_H_per_step: False  # Reset z_H to H_init once at the start of step
 reset_z_H_per_H_cycle: False  # Reset z_H to H_init at the start of each H_cycle
+
+reset_z_L_at_steps: []  # Reset z_L at specific outer steps (0-indexed: step 8 → 7)
+reset_z_H_at_steps: []  # Reset z_H at specific outer steps (0-indexed: step 8 → 7)

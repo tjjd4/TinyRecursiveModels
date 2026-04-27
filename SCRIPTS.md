@@ -74,7 +74,7 @@ arch.H_cycles=3 arch.L_cycles=6 \
 +run_name=${run_name}
 ```
 
-#### Reset
+#### Reset z_L per H cycle
 
 ```bash
 run_name="z_analysis_pretrain_mlp_t_sudoku_reset_zL_per_H_cycle_44"
@@ -90,6 +90,44 @@ arch.reset_z_L_per_step=False \
 arch.reset_z_L_per_H_cycle=True \
 arch.reset_z_H_per_step=False \
 arch.reset_z_H_per_H_cycle=False \
++run_name=${run_name}
+```
+
+#### Reset z_L or z_H at specific steps
+
+```bash
+run_name="z_analysis_pretrain_mlp_t_sudoku_reset_zL_at_step_2_44"
+python z_analysis.py \
+arch=trm_reset_trace \
+data_paths="[data/sudoku-extreme-1k-aug-1000]" \
+evaluators="[]" \
+arch.mlp_t=True arch.pos_encodings=none \
+arch.L_layers=2 \
+arch.H_cycles=3 arch.L_cycles=6 \
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_44/step_65100" \
+arch.reset_z_L_per_step=False \
+arch.reset_z_L_per_H_cycle=False \
+arch.reset_z_H_per_step=False \
+arch.reset_z_H_per_H_cycle=False \
+arch.reset_z_L_at_steps="[1]" \
+arch.reset_z_H_at_steps="[]" \
++run_name=${run_name}
+
+run_name="z_analysis_pretrain_mlp_t_sudoku_reset_zH_at_step_2_44"
+python z_analysis.py \
+arch=trm_reset_trace \
+data_paths="[data/sudoku-extreme-1k-aug-1000]" \
+evaluators="[]" \
+arch.mlp_t=True arch.pos_encodings=none \
+arch.L_layers=2 \
+arch.H_cycles=3 arch.L_cycles=6 \
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_44/step_65100" \
+arch.reset_z_L_per_step=False \
+arch.reset_z_L_per_H_cycle=False \
+arch.reset_z_H_per_step=False \
+arch.reset_z_H_per_H_cycle=False \
+arch.reset_z_L_at_steps="[]" \
+arch.reset_z_H_at_steps="[1]" \
 +run_name=${run_name}
 ```
 
@@ -197,6 +235,25 @@ python scripts/compute_degradation_rate.py \
 --baseline   checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_44/z_analysis_step_0/z_raw.npz \
 --ablation_A checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_per_H_cycle_44/z_analysis_step_0/z_raw.npz \
 --ablation_B checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_per_step_44/z_analysis_step_0/z_raw.npz
+
+python scripts/compute_degradation_rate.py \
+--baseline   checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_44/z_analysis_step_0/z_raw.npz \
+--ablation_A checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_at_step_8_44/z_analysis_step_0/z_raw.npz \
+--ablation_B checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_at_step_8_44/z_analysis_step_0/z_raw.npz
+```
+
+### Plot Degradation Curve
+
+```bash
+python scripts/plot_degradation_curve.py \
+--baseline  checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_44/z_analysis_step_0/z_raw.npz \
+--zH_k4     checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zH_at_step_4_44/z_analysis_step_0/z_raw.npz \
+--zH_k8     checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zH_at_step_8_44/z_analysis_step_0/z_raw.npz \
+--zH_k12    checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zH_at_step_12_44/z_analysis_step_0/z_raw.npz \
+--zL_k4     checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_at_step_4_44/z_analysis_step_0/z_raw.npz \
+--zL_k8     checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_at_step_8_44/z_analysis_step_0/z_raw.npz \
+--zL_k12    checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_at_step_12_44/z_analysis_step_0/z_raw.npz \
+--save_dir  checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/degradation_curve
 ```
 
 ## TRM Pretrain Experiments

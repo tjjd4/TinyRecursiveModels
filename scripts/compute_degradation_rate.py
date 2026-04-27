@@ -31,7 +31,7 @@ def load_flags(path: str) -> np.ndarray:
     return flags
 
 
-def compute_degradation(baseline: np.ndarray, ablation: np.ndarray, name: str) -> dict:
+def compute_degradation(baseline: np.ndarray, ablation: np.ndarray, name: str, ablation_path: str = "") -> dict:
     n = min(len(baseline), len(ablation))
     if len(baseline) != len(ablation):
         print(f"  WARNING: size mismatch — baseline={len(baseline)}, {name}={len(ablation)}. Truncating to {n}.")
@@ -58,6 +58,7 @@ def compute_degradation(baseline: np.ndarray, ablation: np.ndarray, name: str) -
 
     return dict(
         name=name,
+        checkpoint=ablation_path,
         n_total=n,
         n_baseline_correct=int(n_baseline_correct),
         n_baseline_incorrect=int(n_baseline_incorrect),
@@ -75,6 +76,7 @@ def print_result(r: dict) -> None:
     print(f"\n{'='*60}")
     print(f"  {r['name']}")
     print(f"{'='*60}")
+    print(f"  Checkpoint             : {r['checkpoint']}")
     print(f"  Total puzzles compared : {r['n_total']}")
     print(f"  Baseline correct       : {r['n_baseline_correct']}")
     print(f"  Baseline incorrect     : {r['n_baseline_incorrect']}")
@@ -98,19 +100,20 @@ def main():
         parser.error("At least one of --ablation_A or --ablation_B must be provided.")
 
     print("\nLoading files...")
+    print(f"  Baseline checkpoint    : {args.baseline}")
     baseline = load_flags(args.baseline)
+    abl_A = load_flags(args.ablation_A) if args.ablation_A else None
+    abl_B = load_flags(args.ablation_B) if args.ablation_B else None
 
     results = []
 
-    if args.ablation_A:
-        abl_A = load_flags(args.ablation_A)
-        r_A = compute_degradation(baseline, abl_A, "reset per H_cycle")
+    if abl_A is not None:
+        r_A = compute_degradation(baseline, abl_A, "reset per H_cycle", args.ablation_A)
         results.append(r_A)
         print_result(r_A)
 
-    if args.ablation_B:
-        abl_B = load_flags(args.ablation_B)
-        r_B = compute_degradation(baseline, abl_B, "reset per step")
+    if abl_B is not None:
+        r_B = compute_degradation(baseline, abl_B, "reset per step", args.ablation_B)
         results.append(r_B)
         print_result(r_B)
 

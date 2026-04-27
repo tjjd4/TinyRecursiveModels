@@ -93,6 +93,14 @@ class TinyRecursiveReasoningModel_ACTV1_Trace(TinyRecursiveReasoningModel_ACTV1)
 
         new_steps = torch.where(carry.halted, 0, carry.steps)
 
+        # Step-based selective reset (in-place; safe since new_inner_carry tensors are freshly allocated by reset_carry)
+        if self.config.reset_z_L_at_steps:
+            step_reset_L = sum(new_steps == s for s in self.config.reset_z_L_at_steps).bool()
+            new_inner_carry.z_L[step_reset_L] = self.inner.L_init
+        if self.config.reset_z_H_at_steps:
+            step_reset_H = sum(new_steps == s for s in self.config.reset_z_H_at_steps).bool()
+            new_inner_carry.z_H[step_reset_H] = self.inner.H_init
+
         new_current_data = {k: torch.where(carry.halted.view((-1, ) + (1, ) * (batch[k].ndim - 1)), batch[k], v) for k, v in carry.current_data.items()}
 
         # Forward inner model

@@ -67,6 +67,9 @@ class TinyRecursiveReasoningModel_ACTV1Config(BaseModel):
     reset_z_H_per_step: bool  # Reset z_H to H_init once at the start of step
     reset_z_H_per_H_cycle: bool  # Reset z_H to H_init at the start of each H_cycle
 
+    reset_z_L_at_steps: List[int] = []  # Reset z_L at specific steps (0-indexed: step 8 → 7)
+    reset_z_H_at_steps: List[int] = []  # Reset z_H at specific steps (0-indexed: step 8 → 7)
+
 class TinyRecursiveReasoningModel_ACTV1Block(nn.Module):
     def __init__(self, config: TinyRecursiveReasoningModel_ACTV1Config) -> None:
         super().__init__()
@@ -208,8 +211,8 @@ class TinyRecursiveReasoningModel_ACTV1_Inner(nn.Module):
 
         # Forward iterations
         it = 0
-        z_H = self.H_init.expand_as(carry.z_H) if self.config.reset_z_H_per_forward else carry.z_H
-        z_L = self.L_init.expand_as(carry.z_L) if self.config.reset_z_L_per_forward else carry.z_L
+        z_H = self.H_init.expand_as(carry.z_H) if self.config.reset_z_H_per_step else carry.z_H
+        z_L = self.L_init.expand_as(carry.z_L) if self.config.reset_z_L_per_step else carry.z_L
         # H_cycles-1 without grad
         with torch.no_grad():
             for _H_step in range(self.config.H_cycles-1):
@@ -266,6 +269,14 @@ class TinyRecursiveReasoningModel_ACTV1(nn.Module):
         new_inner_carry = self.inner.reset_carry(carry.halted, carry.inner_carry)
         
         new_steps = torch.where(carry.halted, 0, carry.steps)
+
+        # Step-based selective reset (in-place; safe since new_inner_carry tensors are freshly allocated by reset_carry)
+        if self.config.reset_z_L_at_steps:
+            step_reset_L = sum(new_steps == s for s in self.config.reset_z_L_at_steps).bool()
+            new_inner_carry.z_L[step_reset_L] = self.inner.L_init
+        if self.config.reset_z_H_at_steps:
+            step_reset_H = sum(new_steps == s for s in self.config.reset_z_H_at_steps).bool()
+            new_inner_carry.z_H[step_reset_H] = self.inner.H_init
 
         new_current_data = {k: torch.where(carry.halted.view((-1, ) + (1, ) * (batch[k].ndim - 1)), batch[k], v) for k, v in carry.current_data.items()}
 
