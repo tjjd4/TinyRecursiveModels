@@ -1563,7 +1563,7 @@ def plot_trajectory_heatmap(
         trajs = _get_trajectory(idx_list, step_empty_correct_count, n_empty, n_steps)
         steps = np.arange(n_steps)
         rhos = np.array([
-            stats.spearmanr(steps, trajs[i]).statistic
+            float("nan") if np.all(trajs[i] == trajs[i][0]) else stats.spearmanr(steps, trajs[i]).statistic
             for i in range(len(idx_list))
         ])
         valid_mask = ~np.isnan(rhos)
