@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Tuple
 import torch
 import torch._dynamo
 
-from models.recursive_reasoning.trm_seperate import (
+from models.recursive_reasoning.trm_separate import (
     TinyRecursiveReasoningModel_ACTV1,
     TinyRecursiveReasoningModel_ACTV1_Inner,
     TinyRecursiveReasoningModel_ACTV1Carry,
