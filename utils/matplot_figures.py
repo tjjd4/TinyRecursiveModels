@@ -1076,15 +1076,15 @@ def _imshow_or_nodata(ax, matrix, title, T, tick_labels, **im_kwargs):
     return im
 
 
-def _split_and_compute_cka(all_z, correct_mask, label):
-    """Split (N, T, D) by correct_mask and compute CKA for each non-empty half.
+def _split_and_compute_cka(all_z, correct_flags, label):
+    """Split (N, T, D) by correct_flags and compute CKA for each non-empty half.
     Returns (cka_correct, cka_incorrect, n_correct, n_incorrect).
     Either CKA matrix is None when the corresponding group is empty.
     """
     all_z        = np.array(all_z)
-    correct_mask = np.array(correct_mask, dtype=bool)
-    z_correct    = all_z[correct_mask]
-    z_incorrect  = all_z[~correct_mask]
+    correct_flags = np.array(correct_flags, dtype=bool)
+    z_correct    = all_z[correct_flags]
+    z_incorrect  = all_z[~correct_flags]
     print(f"Computing {label} CKA for {z_correct.shape[0]} correct puzzles...")
     cka_correct   = _compute_cka_matrix(z_correct)   if z_correct.shape[0]   > 0 else None
     print(f"Computing {label} CKA for {z_incorrect.shape[0]} incorrect puzzles...")
@@ -1135,9 +1135,9 @@ def _cka_figure(cka_correct, cka_incorrect,
     return fig
 
 
-def plot_cka_matrices(all_z, correct_mask, save_dir: str, z_label: str = "z_H"):
+def plot_cka_matrices(all_z, correct_flags, save_dir: str, z_label: str = "z_H"):
     """all_z: (N, T, D) numpy array, mean-pooled over cell positions"""
-    cka_c, cka_i, n_c, n_i = _split_and_compute_cka(all_z, correct_mask, z_label)
+    cka_c, cka_i, n_c, n_i = _split_and_compute_cka(all_z, correct_flags, z_label)
     return _cka_figure(
         cka_c, cka_i,
         f'{z_label} CKA — Correct (n={n_c:,})',
@@ -1146,9 +1146,9 @@ def plot_cka_matrices(all_z, correct_mask, save_dir: str, z_label: str = "z_H"):
     )
 
 
-def plot_puzzle_emb_cka_matrices(all_z_puzzle_emb, correct_mask, save_dir: str, z_label: str = "z_H"):
+def plot_puzzle_emb_cka_matrices(all_z_puzzle_emb, correct_flags, save_dir: str, z_label: str = "z_H"):
     """all_z: (N, T, D) numpy array, mean-pooled over puzzle_emb positions"""
-    cka_c, cka_i, n_c, n_i = _split_and_compute_cka(all_z_puzzle_emb, correct_mask, f'{z_label} puzzle-emb')
+    cka_c, cka_i, n_c, n_i = _split_and_compute_cka(all_z_puzzle_emb, correct_flags, f'{z_label} puzzle-emb')
     return _cka_figure(
         cka_c, cka_i,
         f'{z_label} Puzzle Emb CKA — Correct (n={n_c:,})',
@@ -1159,12 +1159,12 @@ def plot_puzzle_emb_cka_matrices(all_z_puzzle_emb, correct_mask, save_dir: str, 
 
 def plot_halt_cka_matrices(
     all_z_halt: np.ndarray,
-    correct_mask: np.ndarray,
+    correct_flags: np.ndarray,
     save_dir: str,
     z_label: str = "z_H",
 ):
     """all_z_halt: (N, T, D) — halt token trajectories (position 0)"""
-    cka_c, cka_i, n_c, n_i = _split_and_compute_cka(all_z_halt, correct_mask, f'{z_label} halt')
+    cka_c, cka_i, n_c, n_i = _split_and_compute_cka(all_z_halt, correct_flags, f'{z_label} halt')
     return _cka_figure(
         cka_c, cka_i,
         f'{z_label} Halt CKA — Correct (n={n_c:,})',
@@ -1175,7 +1175,7 @@ def plot_halt_cka_matrices(
 
 def plot_ctx_cka_matrices(
     all_z_ctx: Optional[np.ndarray],
-    correct_mask: np.ndarray,
+    correct_flags: np.ndarray,
     save_dir: str,
     z_label: str = "z_H",
 ):
@@ -1183,12 +1183,112 @@ def plot_ctx_cka_matrices(
     if all_z_ctx is None:
         print(f"[{z_label}] puzzle_emb_len == 1, no context tokens. Skipping.")
         return None
-    cka_c, cka_i, n_c, n_i = _split_and_compute_cka(all_z_ctx, correct_mask, f'{z_label} ctx')
+    cka_c, cka_i, n_c, n_i = _split_and_compute_cka(all_z_ctx, correct_flags, f'{z_label} ctx')
     return _cka_figure(
         cka_c, cka_i,
         f'{z_label} Ctx CKA — Correct (n={n_c:,})',
         f'{z_label} Ctx CKA — Incorrect (n={n_i:,})',
         f'[E2.5b] Linear CKA Inter-Step Similarity: {z_label} — Context Tokens (pos 1+)',
+    )
+ 
+
+def _per_cell_cka_mean(z_group, cell_mask=None, min_n=50, label=""):
+    if z_group.shape[0] == 0:
+        return None
+ 
+    n, T, P, D = z_group.shape
+    acc = np.zeros((T, T), dtype=np.float32)
+    n_used = 0
+    for c in range(P):
+        if cell_mask is None:
+            sel = slice(None)
+            n_sub = n
+        else:
+            sel = cell_mask[:, c]
+            n_sub = int(sel.sum())
+            if n_sub < min_n:
+                continue
+        acc += _compute_cka_matrix(z_group[sel, :, c, :])
+        n_used += 1
+        if n_used % 10 == 0:
+            print(f"    [{label}] {n_used} cells aggregated...")
+    return acc / n_used if n_used > 0 else None
+ 
+ 
+def _split_and_compute_cell_cka(all_z, correct_flags, cell_mask, label, min_n=50):
+    correct_flags = np.asarray(correct_flags, dtype=bool)
+    all_z = np.array(all_z)
+    z_c, z_i = all_z[correct_flags], all_z[~correct_flags]
+    m_c = cell_mask[correct_flags]  if cell_mask is not None else None
+    m_i = cell_mask[~correct_flags] if cell_mask is not None else None
+ 
+    print(f"Computing {label} cell-level CKA for {z_c.shape[0]} correct puzzles...")
+    cka_c = _per_cell_cka_mean(z_c, m_c, min_n=min_n, label=f"{label} correct")
+    print(f"Computing {label} cell-level CKA for {z_i.shape[0]} incorrect puzzles...")
+    cka_i = _per_cell_cka_mean(z_i, m_i, min_n=min_n, label=f"{label} incorrect")
+    return cka_c, cka_i, z_c.shape[0], z_i.shape[0]
+ 
+ 
+def plot_split_cell_level_cka_matrices(
+    all_z: np.ndarray,
+    correct_flags: np.ndarray,
+    given_mask: np.ndarray,
+    cell_collected_idx: np.ndarray,
+    save_dir: str,
+    z_label: str = "z_H",
+):
+    correct_flags = np.asarray(correct_flags, dtype=bool)
+    correct_flags_collected = correct_flags[cell_collected_idx]
+    given_mask = np.asarray(given_mask, dtype=bool)
+    given_mask_collected = given_mask[cell_collected_idx]
+    empty_mask_collected = ~given_mask_collected
+
+    cka_c, cka_i, n_c, n_i = _split_and_compute_cell_cka(
+        all_z, correct_flags_collected, empty_mask_collected, f"{z_label} empty")
+    fig_empty = _cka_figure(
+        cka_c, cka_i,
+        f"{z_label} Empty-cell CKA — Correct (n={n_c:,})",
+        f"{z_label} Empty-cell CKA — Incorrect (n={n_i:,})",
+        f"[E2.5c] Linear CKA Inter-Step Similarity: {z_label} — Empty Cells",
+    )
+ 
+    cka_c, cka_i, n_c, n_i = _split_and_compute_cell_cka(
+        all_z, correct_flags_collected, given_mask_collected, f"{z_label} given")
+    fig_given = _cka_figure(
+        cka_c, cka_i,
+        f"{z_label} Given-cell CKA — Correct (n={n_c:,})",
+        f"{z_label} Given-cell CKA — Incorrect (n={n_i:,})",
+        f"[E2.5c] Linear CKA Inter-Step Similarity: {z_label} — Given Cells",
+    )
+ 
+    return fig_empty, fig_given
+
+ 
+def plot_cell_level_cka_matrices(
+    all_z: np.ndarray,
+    correct_flags: np.ndarray,
+    cell_collected_idx: np.ndarray,
+    save_dir: str,
+    z_label: str = "z_H",
+):
+    correct_flags = np.asarray(correct_flags, dtype=bool)
+    correct_flags_collected = correct_flags[np.asarray(cell_collected_idx)]
+    all_z = np.array(all_z)
+    z_c = all_z[correct_flags_collected]
+    z_i = all_z[~correct_flags_collected]
+    n_c, n_i = z_c.shape[0], z_i.shape[0]
+ 
+    print(f"[{z_label}] computing cell-level CKA for {n_c} correct puzzles...")
+    cka_c = _per_cell_cka_mean(z_c)
+    print(f"[{z_label}] computing cell-level CKA for {n_i} incorrect puzzles...")
+    cka_i = _per_cell_cka_mean(z_i)
+ 
+    return _cka_figure(
+        cka_c, cka_i,
+        f"{z_label} Cell-level CKA — Correct (n={n_c:,})",
+        f"{z_label} Cell-level CKA — Incorrect (n={n_i:,})",
+        f"[E2.5c] Linear CKA Inter-Step Similarity: {z_label} — Cell-level "
+        f"(per-cell, averaged over 81 positions)",
     )
 
 

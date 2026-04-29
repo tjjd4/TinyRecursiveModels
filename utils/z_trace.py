@@ -18,6 +18,8 @@ class ZTrace:
     halt_max_steps: int
     rec_max_correct: int
     rec_max_incorrect: int
+    cell_max_correct: int
+    cell_max_incorrect: int
 
     trajectories: List[np.ndarray] = field(default_factory=list)  # (T, D)
     z_L_trajectories: List[np.ndarray] = field(default_factory=list)  # (T, D)
@@ -48,13 +50,15 @@ class ZTrace:
     n_skipped: int = 0
     is_all_trace_collected: bool = False
 
-    def __init__(self, H_cycles: int, L_cycles: int, puzzle_emb_len: int, halt_max_steps: int, rec_max_correct: int, rec_max_incorrect: int):
+    def __init__(self, H_cycles: int, L_cycles: int, puzzle_emb_len: int, halt_max_steps: int, rec_max_correct: int, rec_max_incorrect: int, cell_max_correct: int, cell_max_incorrect: int):
         self.H_cycles = H_cycles
         self.L_cycles = L_cycles
         self.puzzle_emb_len = puzzle_emb_len
         self.halt_max_steps = halt_max_steps
         self.rec_max_correct = rec_max_correct
         self.rec_max_incorrect = rec_max_incorrect
+        self.cell_max_correct = cell_max_correct
+        self.cell_max_incorrect = cell_max_incorrect
 
         # record
         self._rec_z_H = []
@@ -84,6 +88,12 @@ class ZTrace:
         self.residuals = []
         self.z_L_residuals = []
         self.pos_residuals = []
+
+        # step cell z_H and z_L
+        self.z_H_cell_trajs = []
+        self.z_L_cell_trajs = []
+        self.cell_correct_flags = []
+        self.cell_collected_idx = []
 
         # recursion level z_H and z_L
         self.rec_z_H = []
@@ -150,6 +160,9 @@ class ZTrace:
 
         self._rec_n_correct = 0
         self._rec_n_incorrect = 0
+        self._cell_n_correct = 0
+        self._cell_n_incorrect = 0
+
         self.n_stored = 0
         self.n_skipped = 0
         self.is_all_trace_collected = False
@@ -439,6 +452,42 @@ class ZTrace:
                 for t in range(T_actual)
             ])
 
+
+            # cell level
+            want_cell_c = is_correct and self._cell_n_correct < self.cell_max_correct
+            want_cell_i = (not is_correct) and self._cell_n_incorrect < self.cell_max_incorrect
+            if want_cell_c or want_cell_i:
+                # z_H_cell / z_L_cell already exist as locals: (T_actual, 81, D) bfloat16
+                self.z_H_cell_trajs.append(z_H_cell.astype(np.float16))
+                self.z_L_cell_trajs.append(z_L_cell.astype(np.float16))
+                self.cell_correct_flags.append(is_correct)
+                self.cell_collected_idx.append(self.n_stored)
+                if is_correct:
+                    self._cell_n_correct += 1
+                else:
+                    self._cell_n_incorrect += 1
+
+            # recursion level
+            want_correct = (is_correct and self._rec_n_correct < self.rec_max_correct)
+            want_incorrect = (not is_correct and self._rec_n_incorrect < self.rec_max_incorrect)
+            self.is_all_trace_collected = not (want_correct or want_incorrect)
+
+            if not self.is_all_trace_collected and rec_z_H_np is not None:
+                # rec_z_H_np shape: (n_steps * H_cycles, B, L, D)
+                # rec_z_L_np shape: (n_steps * L_cycles * H_cycles, B, L, D)
+                rec_H = np.stack([rec_z_H_np[t * self.H_cycles : t * self.H_cycles + self.H_cycles, b, cell_start:, :] for t in range(T_actual)])  # (T_actual, H_cycles, L, D)
+                rec_L = np.stack([rec_z_L_np[t * self.L_cycles * self.H_cycles : t * self.L_cycles * self.H_cycles + self.L_cycles * self.H_cycles, b, cell_start:, :] for t in range(T_actual)])  # (T_actual, L_cycles * H_cycles, L, D)
+
+                self.rec_z_H.append(rec_H)
+                self.rec_z_L.append(rec_L)
+                self.rec_correct_flags.append(is_correct)
+                self.rec_ratings.append(rating)
+
+                if is_correct:
+                    self._rec_n_correct += 1
+                else:
+                    self._rec_n_incorrect += 1
+
             self.trajectories.append(z_H_cell_traj)
             self.z_L_trajectories.append(z_L_cell_traj)
             # self.z_H_puzzle_emb_trajs.append(z_H_puzzle_emb_traj)
@@ -493,26 +542,6 @@ class ZTrace:
             self.step_output_correct_rank.append(correct_rank.astype(np.int8))   # (T_actual, 81) int8
             self.n_stored += 1
 
-            # recursion level
-            want_correct = (is_correct and self._rec_n_correct < self.rec_max_correct)
-            want_incorrect = (not is_correct and self._rec_n_incorrect < self.rec_max_incorrect)
-            self.is_all_trace_collected = not (want_correct or want_incorrect)
-
-            if not self.is_all_trace_collected and rec_z_H_np is not None:
-                # rec_z_H_np shape: (n_steps * H_cycles, B, L, D)
-                # rec_z_L_np shape: (n_steps * L_cycles * H_cycles, B, L, D)
-                rec_H = np.stack([rec_z_H_np[t * self.H_cycles : t * self.H_cycles + self.H_cycles, b, cell_start:, :] for t in range(T_actual)])  # (T_actual, H_cycles, L, D)
-                rec_L = np.stack([rec_z_L_np[t * self.L_cycles * self.H_cycles : t * self.L_cycles * self.H_cycles + self.L_cycles * self.H_cycles, b, cell_start:, :] for t in range(T_actual)])  # (T_actual, L_cycles * H_cycles, L, D)
-
-                self.rec_z_H.append(rec_H)
-                self.rec_z_L.append(rec_L)
-                self.rec_correct_flags.append(is_correct)
-                self.rec_ratings.append(rating)
-
-                if is_correct:
-                    self._rec_n_correct += 1
-                else:
-                    self._rec_n_incorrect += 1
 
         del step_z_H_np, step_z_L_np
         del step_preds_np, step_z_L_preds_np

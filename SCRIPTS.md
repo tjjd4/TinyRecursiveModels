@@ -253,8 +253,7 @@ python scripts/compute_degradation_rate.py \
 
 python scripts/compute_degradation_rate.py \
 --baseline   checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_44/z_analysis_step_0/z_raw.npz \
---ablation_A checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_at_step_8_44/z_analysis_step_0/z_raw.npz \
---ablation_B checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_at_step_8_44/z_analysis_step_0/z_raw.npz
+--ablation_A checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_same_input_44/z_analysis_step_0/z_raw.npz
 ```
 
 ### Reset Analysis

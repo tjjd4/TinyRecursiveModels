@@ -25,7 +25,7 @@ from omegaconf import DictConfig
 
 from puzzle_dataset_with_rating import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
 from utils.functions import load_model_class, get_model_source_path, load_checkpoint_from_path
-from utils.matplot_figures import plot_pca_split, plot_pca_combined, plot_forward_residual, plot_pca_variance, plot_displacement_hist, plot_init_to_final_split, plot_pos_residual_heatmap_given, plot_pos_residual_heatmap_empty, plot_pos_residual_by_step, plot_rating_distribution, plot_residual_vs_rating, plot_accuracy_vs_rating, plot_residual_by_rating_colormap, plot_recursion_residual, plot_early_stopping_analysis, plot_logit_lens_accuracy, plot_disagreement, plot_cosine_similarity, plot_cka_matrices, plot_puzzle_emb_cka_matrices, plot_halt_cka_matrices, plot_ctx_cka_matrices, plot_violation_curve, plot_difficulty_stratification, plot_logit_lens_entropy, plot_severity, plot_recursion_effect, plot_trajectory_heatmap, plot_cdf, plot_top1_prob, plot_margin, plot_correct_answer_rank_histogram, plot_correct_is_top2, plot_empty_cell_error_count_distribution
+from utils.matplot_figures import plot_pca_split, plot_pca_combined, plot_forward_residual, plot_pca_variance, plot_displacement_hist, plot_init_to_final_split, plot_pos_residual_heatmap_given, plot_pos_residual_heatmap_empty, plot_pos_residual_by_step, plot_rating_distribution, plot_residual_vs_rating, plot_accuracy_vs_rating, plot_residual_by_rating_colormap, plot_recursion_residual, plot_early_stopping_analysis, plot_logit_lens_accuracy, plot_disagreement, plot_cosine_similarity, plot_cka_matrices, plot_puzzle_emb_cka_matrices, plot_halt_cka_matrices, plot_ctx_cka_matrices, plot_cell_level_cka_matrices, plot_split_cell_level_cka_matrices, plot_violation_curve, plot_difficulty_stratification, plot_logit_lens_entropy, plot_severity, plot_recursion_effect, plot_trajectory_heatmap, plot_cdf, plot_top1_prob, plot_margin, plot_correct_answer_rank_histogram, plot_correct_is_top2, plot_empty_cell_error_count_distribution
 
 from models.losses.loss_fn import IGNORE_LABEL_ID
 from utils.z_trace import ZTrace
@@ -80,6 +80,8 @@ class TraceConfig(pydantic.BaseModel):
     z_analysis_pca_components: int
     rec_max_correct: int
     rec_max_incorrect: int
+    cell_max_correct: int
+    cell_max_incorrect: int
 
 
 @dataclass
@@ -416,7 +418,16 @@ def run_z_analysis(
     wandb_log["z_analysis/cka_matrices_z_L_halt"] = _save_wandb(plot_halt_cka_matrices(collector.z_L_halt_trajs, collector.correct_flags, save_dir, z_label="z_L"), save_dir, "cka_matrices_z_L_halt.png")
     wandb_log["z_analysis/cka_matrices_ctx"] = _save_wandb(plot_ctx_cka_matrices(collector.z_H_ctx_trajs, collector.correct_flags, save_dir, z_label="z_H"), save_dir, "cka_matrices_ctx.png")
     wandb_log["z_analysis/cka_matrices_z_L_ctx"] = _save_wandb(plot_ctx_cka_matrices(collector.z_L_ctx_trajs, collector.correct_flags, save_dir, z_label="z_L"), save_dir, "cka_matrices_z_L_ctx.png")
-    
+    wandb_log["z_analysis/cka_matrices_cell_level"] = _save_wandb(plot_cell_level_cka_matrices(collector.z_H_cell_trajs, collector.correct_flags, collector.cell_collected_idx, save_dir, z_label="z_H"), save_dir, "cka_matrices_cell_level.png")
+    wandb_log["z_analysis/cka_matrices_z_L_cell_level"] = _save_wandb(plot_cell_level_cka_matrices(collector.z_L_cell_trajs, collector.correct_flags, collector.cell_collected_idx, save_dir, z_label="z_L"), save_dir, "cka_matrices_z_L_cell_level.png")
+    _fig_empty, _fig_given = plot_split_cell_level_cka_matrices(collector.z_H_cell_trajs, collector.correct_flags, collector.given_masks, collector.cell_collected_idx, save_dir, z_label="z_H")
+    wandb_log["z_analysis/cka_matrices_split_cell_level_empty"] = _save_wandb(_fig_empty, save_dir, "cka_matrices_split_cell_level_empty.png")
+    wandb_log["z_analysis/cka_matrices_split_cell_level_given"] = _save_wandb(_fig_given, save_dir, "cka_matrices_split_cell_level_given.png")
+    _fig_empty, _fig_given = plot_split_cell_level_cka_matrices(collector.z_L_cell_trajs, collector.correct_flags, collector.given_masks, collector.cell_collected_idx, save_dir, z_label="z_L")
+    wandb_log["z_analysis/cka_matrices_z_L_split_cell_level_empty"] = _save_wandb(_fig_empty, save_dir, "cka_matrices_z_L_split_cell_level_empty.png")
+    wandb_log["z_analysis/cka_matrices_z_L_split_cell_level_given"] = _save_wandb(_fig_given, save_dir, "cka_matrices_z_L_split_cell_level_given.png")
+
+
     # Violation curve
     wandb_log["z_analysis/violation_curve"] = _save_wandb(plot_violation_curve(collector.step_preds_all, collector.given_masks, collector.ratings, collector.correct_flags, save_dir), save_dir, "violation_curve.png")
 
@@ -613,15 +624,21 @@ def launch(hydra_config: DictConfig):
             L_cycles = config.arch.L_cycles,
             puzzle_emb_len = puzzle_emb_len,
             halt_max_steps = config.arch.halt_max_steps,
-            rec_max_correct = 50,
-            rec_max_incorrect = 50,
+            rec_max_correct = config.rec_max_correct,
+            rec_max_incorrect = config.rec_max_incorrect,
+            cell_max_correct = config.cell_max_correct,
+            cell_max_incorrect = config.cell_max_incorrect,
         )
         print(f"[z_analysis] Enabled\n"
               f"H_cycles={config.arch.H_cycles}\n"
               f"L_cycles={config.arch.L_cycles}\n"
               f"puzzle_emb_len={puzzle_emb_len}\n"
               f"halt_max_steps={config.arch.halt_max_steps}\n"
-              f"snapshots_per_step={z_trace.snapshots_per_step}")
+              f"snapshots_per_step={z_trace.snapshots_per_step}\n"
+              f"rec_max_correct={config.rec_max_correct}\n"
+              f"rec_max_incorrect={config.rec_max_incorrect}\n"
+              f"cell_max_correct={config.cell_max_correct}\n"
+              f"cell_max_incorrect={config.cell_max_incorrect}")
 
 
     reduced_metrics = None

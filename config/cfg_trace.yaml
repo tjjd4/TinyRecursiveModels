@@ -30,5 +30,11 @@ seed: 0
 z_analysis_max_samples: 50000
 z_analysis_max_samples_pca: 256
 z_analysis_pca_components: 10
+
+# recursion collect amount
 rec_max_correct: 50
 rec_max_incorrect: 50
+
+# cell collect amount
+cell_max_correct: 5000
+cell_max_incorrect: 5000
