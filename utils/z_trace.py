@@ -113,6 +113,8 @@ class ZTrace:
 
         # how many steps the empty cell is in error state
         self.empty_error_step_count = []
+        # number of unique predictions across steps per empty cell (1 = locked, >1 = changing)
+        self.empty_pred_unique_count = []
 
         # first time predicts all valid cells correctly
         self.step_first_correct = []
@@ -352,6 +354,10 @@ class ZTrace:
             empty_acc = empty_correct_count / max(n_empty, 1)
 
             empty_error_step_count = (~per_step_correct[:, empty]).sum(axis=0).astype(np.int8)
+            empty_pred_unique_count = np.array(
+                [np.unique(col).size for col in sample_step_preds[:, empty].T],
+                dtype=np.int8,
+            )
 
             # prediction stability: start from the last step and go backwards, the earliest step that makes the prediction no longer change
             stable_step = T_actual
@@ -447,8 +453,8 @@ class ZTrace:
                 np.mean([
                     np.dot(z_H_cell[t, c], z_L_cell[t, c])
                     / (np.linalg.norm(z_H_cell[t, c]) * np.linalg.norm(z_L_cell[t, c]) + 1e-8)
-                    for c in range(81) if given[c]
-                ]) if given.any() else np.nan
+                    for c in range(81) if given_valid[c]
+                ]) if given_valid.any() else np.nan
                 for t in range(T_actual)
             ])
 
@@ -512,6 +518,7 @@ class ZTrace:
             self.step_empty_acc.append(empty_acc)
             self.step_given_acc.append(given_acc)
             self.empty_error_step_count.append(empty_error_step_count)
+            self.empty_pred_unique_count.append(empty_pred_unique_count)
             self.step_pred_stable.append(stable_step)
             self.step_first_correct.append(first_correct_step)
             self.step_preds_all.append(sample_step_preds.astype(np.int16))

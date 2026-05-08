@@ -25,7 +25,7 @@ from omegaconf import DictConfig
 
 from puzzle_dataset_with_rating import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
 from utils.functions import load_model_class, get_model_source_path, load_checkpoint_from_path
-from utils.matplot_figures import plot_pca_split, plot_pca_combined, plot_forward_residual, plot_pca_variance, plot_displacement_hist, plot_init_to_final_split, plot_pos_residual_heatmap_given, plot_pos_residual_heatmap_empty, plot_pos_residual_by_step, plot_rating_distribution, plot_residual_vs_rating, plot_accuracy_vs_rating, plot_residual_by_rating_colormap, plot_recursion_residual, plot_early_stopping_analysis, plot_logit_lens_accuracy, plot_disagreement, plot_cosine_similarity, plot_cka_matrices, plot_puzzle_emb_cka_matrices, plot_halt_cka_matrices, plot_ctx_cka_matrices, plot_cell_level_cka_matrices, plot_split_cell_level_cka_matrices, plot_violation_curve, plot_difficulty_stratification, plot_logit_lens_entropy, plot_severity, plot_recursion_effect, plot_trajectory_heatmap, plot_cdf, plot_top1_prob, plot_margin, plot_correct_answer_rank_histogram, plot_correct_is_top2, plot_empty_cell_error_count_distribution
+from utils.matplot_figures import plot_pca_split, plot_pca_combined, plot_forward_residual, plot_pca_variance, plot_displacement_hist, plot_init_to_final_split, plot_pos_residual_heatmap_given, plot_pos_residual_heatmap_empty, plot_pos_residual_by_step, plot_rating_distribution, plot_residual_vs_rating, plot_accuracy_vs_rating, plot_residual_by_rating_colormap, plot_recursion_residual, plot_early_stopping_analysis, plot_logit_lens_accuracy, plot_disagreement, plot_cosine_similarity, plot_cka_matrices, plot_puzzle_emb_cka_matrices, plot_halt_cka_matrices, plot_ctx_cka_matrices, plot_cell_level_cka_matrices, plot_split_cell_level_cka_matrices, plot_violation_curve, plot_difficulty_stratification, plot_logit_lens_entropy, plot_empty_cell_severity, plot_recursion_effect, plot_trajectory_heatmap, plot_cdf, plot_top1_prob, plot_margin, plot_correct_answer_rank_histogram, plot_correct_is_top2, plot_empty_cell_error_count_distribution, plot_empty_cell_error_unique_relation
 
 from models.losses.loss_fn import IGNORE_LABEL_ID
 from utils.z_trace import ZTrace
@@ -435,7 +435,7 @@ def run_z_analysis(
     wandb_log["z_analysis/difficulty_stratification"] = _save_wandb(plot_difficulty_stratification(collector.step_empty_acc, collector.given_masks, collector.ratings, collector.correct_flags, save_dir), save_dir, "difficulty_stratification.png")
 
     # error count
-    wandb_log["z_analysis/severity"] = _save_wandb(plot_severity(collector.step_empty_correct_count, collector.step_given_correct_count, collector.n_empty, collector.n_given, collector.correct_flags, save_dir), save_dir, "severity.png")
+    wandb_log["z_analysis/empty_cell_severity"] = _save_wandb(plot_empty_cell_severity(collector.step_empty_correct_count, collector.n_empty, collector.correct_flags, save_dir), save_dir, "severity.png")
     wandb_log["z_analysis/recursion_effect"] = _save_wandb(plot_recursion_effect(collector.step_empty_correct_count, collector.n_empty, collector.correct_flags, save_dir), save_dir, "recursion_effect.png")
     wandb_log["z_analysis/trajectory_heatmap"] = _save_wandb(plot_trajectory_heatmap(collector.step_empty_correct_count, collector.n_empty, collector.correct_flags, save_dir), save_dir, "trajectory_heatmap.png")
     wandb_log["z_analysis/cdf"] = _save_wandb(plot_cdf(collector.step_empty_correct_count, collector.n_empty, collector.correct_flags, save_dir), save_dir, "cdf.png")
@@ -448,6 +448,7 @@ def run_z_analysis(
 
     # Empty cell error count distribution
     wandb_log["z_analysis/empty_cell_error_count_distribution"] = _save_wandb(plot_empty_cell_error_count_distribution(collector.empty_error_step_count, collector.correct_flags, save_dir), save_dir, "empty_cell_error_count_distribution.png")
+    wandb_log["z_analysis/empty_cell_error_unique_relation"] = _save_wandb(plot_empty_cell_error_unique_relation(collector.empty_error_step_count, collector.empty_pred_unique_count, collector.correct_flags, save_dir), save_dir, "empty_cell_error_unique_relation.png")
 
     # Rating-based plots
     if collector.ratings:

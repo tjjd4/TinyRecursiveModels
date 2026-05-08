@@ -1494,72 +1494,72 @@ def _get_error_rates(idx_list, t, source, n_cells):
     return np.array(rates)
 
 
-def plot_severity(
-    step_empty_correct_count, step_given_correct_count,
-    n_empty, n_given, correct_flags: List[bool], save_dir: str
+def plot_empty_cell_severity(
+    step_empty_correct_count,
+    n_empty, correct_flags: List[bool], save_dir: str
 ):
-    def _plot_error_hist(ax, errors, color, title, xlabel, show_zero=False):
+    def _plot_error_hist(ax, errors, color, title, xlabel, x_max):
         if len(errors) == 0:
             ax.set_title(f'{title}\n(no data)')
             ax.set_xlabel(xlabel)
             ax.set_ylabel('Number of puzzles')
+            ax.set_xlim(0, x_max)
             return
-        max_bin = max(int(errors.max()) + 2, 3)
-        ax.hist(errors, bins=range(0, max_bin),
+        ax.hist(errors, bins=range(0, x_max + 1),
                 color=color, edgecolor='black', alpha=0.8)
-        if show_zero:
-            n_zero = int((errors == 0).sum())
-            ax.set_title(f'{title}\nmean={np.mean(errors):.2f}, '
-                        f'zero-error={n_zero}/{len(errors)}')
-        else:
-            ax.axvline(np.mean(errors), color='red', ls='--', lw=1.5,
-                    label=f'mean={np.mean(errors):.1f}')
-            ax.axvline(np.median(errors), color='blue', ls='--', lw=1.5,
-                    label=f'median={np.median(errors):.0f}')
-            ax.set_title(f'{title}\nmean={np.mean(errors):.1f}, '
-                        f'median={np.median(errors):.0f}')
-            ax.legend(fontsize=7)
+        ax.axvline(np.mean(errors), color='red', ls='--', lw=1.5,
+                label=f'mean={np.mean(errors):.1f}')
+        ax.axvline(np.median(errors), color='blue', ls='--', lw=1.5,
+                label=f'median={np.median(errors):.0f}')
+        ax.set_title(f'{title}\nmean={np.mean(errors):.1f}, '
+                    f'median={np.median(errors):.0f}')
+        ax.legend(fontsize=7)
         ax.set_xlabel(xlabel)
         ax.set_ylabel('Number of puzzles')
+        ax.set_xlim(0, x_max)
         ax.grid(True, alpha=0.3)
 
     correct_idx, incorrect_idx = _split_indices(correct_flags)
     highlight_steps = [0, 7, 15]
     step_labels = ['Step 1', 'Step 8', 'Step 16']
 
-    fig, axes = plt.subplots(4, 3, figsize=(18, 22))
-
     row_configs = [
-        # (idx,        source,                   n_cells,  color,           cell_type,    group,     show_zero)
-        (incorrect_idx, step_empty_correct_count, n_empty,  'salmon',        'Empty cell', 'Incorrect', False),
-        (incorrect_idx, step_given_correct_count, n_given,  'lightskyblue',  'Given cell', 'Incorrect', True),
-        (correct_idx,   step_empty_correct_count, n_empty,  'mediumseagreen','Empty cell', 'Correct',   False),
-        (correct_idx,   step_given_correct_count, n_given,  'lightgreen',    'Given cell', 'Correct',   True),
+        # (idx,        color,           group)
+        (incorrect_idx, 'salmon',        'Incorrect'),
+        (correct_idx,   'mediumseagreen','Correct'),
     ]
 
-    for row, (idx, source, n_cells, color, cell_type, group, show_zero) in enumerate(row_configs):
+    # Compute global x-axis max across all six subplots so ranges are comparable.
+    global_max = 0
+    for idx, _, _ in row_configs:
+        for t in highlight_steps:
+            errors = _get_errors(idx, t, step_empty_correct_count, n_empty)
+            if len(errors) > 0:
+                global_max = max(global_max, int(errors.max()))
+    x_max = max(global_max + 1, 2)
+
+    fig, axes = plt.subplots(2, 3, figsize=(18, 11))
+
+    for row, (idx, color, group) in enumerate(row_configs):
         for col, (t, slabel) in enumerate(zip(highlight_steps, step_labels)):
             ax = axes[row, col]
-            errors = _get_errors(idx, t, source, n_cells)
+            errors = _get_errors(idx, t, step_empty_correct_count, n_empty)
             _plot_error_hist(
                 ax, errors, color,
                 title=f'{group} — {slabel}',
-                xlabel=f'{cell_type} error count',
-                show_zero=show_zero
+                xlabel='Empty cell error count',
+                x_max=x_max,
             )
 
-    # Row labels
     row_titles = [
         'Incorrect: Empty cell errors\n(Near-miss vs Catastrophic failure?)',
-        'Incorrect: Given cell errors\n(Constraint anchoring intact?)',
         'Correct: Empty cell errors\n(Convergence speed across steps?)',
-        'Correct: Given cell errors\n(Constraint anchoring in correct trajectories?)',
     ]
     for row, title in enumerate(row_titles):
         axes[row, 0].set_ylabel(f'{title}\n\nNumber of puzzles', fontsize=8)
 
-    fig.suptitle('E2.6a Fig1: Error Severity & Constraint Anchoring\n'
-                 'Correct vs Incorrect × Empty vs Given cells',
+    fig.suptitle('E2.6a Fig1: Error Severity (Empty cell)\n'
+                 'Correct vs Incorrect across recursion steps',
                  fontsize=13, fontweight='bold')
     fig.tight_layout()
     return fig
@@ -2166,7 +2166,7 @@ def plot_empty_cell_error_count_distribution(
     ax.set_xticklabels(['0\n(never-wrong)', '4', '8', '12', '16\n(persistent)'])
     ax.set_xlabel('Error count (steps cell is wrong out of 16)')
     ax.set_ylabel('Proportion of empty cells')
-    ax.set_title('E2.6c Fig1: Per-cell Error Count Distribution (Incorrect Puzzles)',
+    ax.set_title('Empty Cell Error Count Distribution (Incorrect Puzzles)',
                  fontweight='bold')
     ax.grid(True, alpha=0.3, axis='y')
     ax.legend(handles=[
@@ -2174,6 +2174,81 @@ def plot_empty_cell_error_count_distribution(
         Patch(facecolor='#aec7e8', label=f'transient (0 < error < {T_actual})'),
         Patch(facecolor='#d62728', label=f'persistent (error={T_actual})'),
     ], fontsize=8, frameon=False)
+
+    fig.tight_layout()
+    return fig
+
+
+def plot_empty_cell_error_unique_relation(
+    empty_error_step_count: List[np.ndarray],
+    empty_pred_unique_count: List[np.ndarray],
+    correct_flags: List[bool],
+    save_dir: str,
+    T_actual: int = 16,
+) -> plt.Figure:
+    _, incorrect_idx = _split_indices(correct_flags)
+
+    all_errors = np.concatenate([empty_error_step_count[i] for i in incorrect_idx])
+    all_uniques = np.concatenate([empty_pred_unique_count[i] for i in incorrect_idx])
+
+    locked_mask = all_uniques == 1
+    changing_mask = all_uniques > 1
+    total = max(all_errors.size, 1)
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 5))
+
+    # ── Left: unique-prediction-count distribution ──
+    u_bins = np.arange(1, T_actual + 2) - 0.5
+    u_counts, _ = np.histogram(all_uniques, bins=u_bins)
+    u_xs = np.arange(1, T_actual + 1)
+    u_props = u_counts / max(u_counts.sum(), 1)
+
+    u_colors = np.where(u_xs == 1, '#d62728', '#aec7e8')
+    ax1.bar(u_xs, u_props, color=u_colors, edgecolor='white', linewidth=0.4, width=0.85)
+    ax1.text(1, u_props[0] + 0.002, f'{u_props[0]*100:.1f}%',
+             ha='center', va='bottom', fontsize=8, fontweight='bold', color='#d62728')
+    ax1.set_xticks([1, 4, 8, 12, T_actual])
+    ax1.set_xticklabels(['1\n(locked)', '4', '8', '12', f'{T_actual}'])
+    ax1.set_xlabel('Unique prediction count over 16 steps')
+    ax1.set_ylabel('Proportion of empty cells')
+    ax1.set_title('Empty Cell Prediction Diversity (Incorrect Puzzles)',
+                  fontweight='bold')
+    ax1.grid(True, alpha=0.3, axis='y')
+    ax1.legend(handles=[
+        Patch(facecolor='#d62728', label='locked (unique=1)'),
+        Patch(facecolor='#aec7e8', label='changing (unique>1)'),
+    ], fontsize=8, frameon=False)
+
+    # ── Right: error-count split by locked vs changing ──
+    e_bins = np.arange(0, T_actual + 2) - 0.5
+    e_xs = np.arange(0, T_actual + 1)
+
+    locked_counts, _ = np.histogram(all_errors[locked_mask], bins=e_bins)
+    changing_counts, _ = np.histogram(all_errors[changing_mask], bins=e_bins)
+    locked_props = locked_counts / total
+    changing_props = changing_counts / total
+
+    ax2.bar(e_xs, changing_props, color='#aec7e8', edgecolor='white',
+            linewidth=0.4, width=0.85, label='changing (unique>1)')
+    ax2.bar(e_xs, locked_props, bottom=changing_props, color='#d62728',
+            edgecolor='white', linewidth=0.4, width=0.85, label='locked (unique=1)')
+
+    for x, color in [(0, '#2ca02c'), (T_actual, '#d62728')]:
+        total_at_x = locked_props[x] + changing_props[x]
+        ax2.text(x, total_at_x + 0.002,
+                 f'L {locked_props[x]*100:.1f}%\nC {changing_props[x]*100:.1f}%',
+                 ha='center', va='bottom', fontsize=7,
+                 fontweight='bold', color=color)
+
+    ax2.set_xticks([0, 4, 8, 12, T_actual])
+    ax2.set_xticklabels(['0\n(never-wrong)', '4', '8', '12',
+                         f'{T_actual}\n(persistent)'])
+    ax2.set_xlabel('Error count (steps cell is wrong out of 16)')
+    ax2.set_ylabel('Proportion of empty cells')
+    ax2.set_title('Error Count × Locked vs Changing (Incorrect Puzzles)',
+                  fontweight='bold')
+    ax2.grid(True, alpha=0.3, axis='y')
+    ax2.legend(fontsize=8, frameon=False)
 
     fig.tight_layout()
     return fig
