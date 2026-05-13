@@ -115,6 +115,16 @@ class ZTrace:
         self.empty_error_step_count = []
         # number of unique predictions across steps per empty cell (1 = locked, >1 = changing)
         self.empty_pred_unique_count = []
+        # step-to-step prediction value changes per empty cell (0..T-1) — frequency, not diversity
+        self.empty_pred_change_count = []
+        # number of wrong→correct transitions per empty cell
+        self.empty_flips_to_correct = []
+        # number of correct→wrong transitions per empty cell
+        self.empty_flips_to_wrong = []
+        # whether final-step prediction is correct per empty cell (bool)
+        self.empty_final_correct = []
+        # per-step fraction of empty cells whose prediction changed at boundary t→t+1, shape (T-1,)
+        self.step_empty_change_rate = []
 
         # first time predicts all valid cells correctly
         self.step_first_correct = []
@@ -353,11 +363,21 @@ class ZTrace:
             given_acc = given_correct_count / max(n_given, 1)
             empty_acc = empty_correct_count / max(n_empty, 1)
 
-            empty_error_step_count = (~per_step_correct[:, empty]).sum(axis=0).astype(np.int8)
+            empty_step_preds = sample_step_preds[:, empty]            # (T_actual, n_empty)
+            empty_per_step_correct = per_step_correct[:, empty]        # (T_actual, n_empty) bool
+            empty_error_step_count = (~empty_per_step_correct).sum(axis=0).astype(np.int8)
             empty_pred_unique_count = np.array(
-                [np.unique(col).size for col in sample_step_preds[:, empty].T],
+                [np.unique(col).size for col in empty_step_preds.T],
                 dtype=np.int8,
             )
+            empty_pred_change_count = (np.diff(empty_step_preds, axis=0) != 0).sum(axis=0).astype(np.int8)
+            empty_flips_to_correct = (~empty_per_step_correct[:-1] &  empty_per_step_correct[1:]).sum(axis=0).astype(np.int8)
+            empty_flips_to_wrong   = ( empty_per_step_correct[:-1] & ~empty_per_step_correct[1:]).sum(axis=0).astype(np.int8)
+            empty_final_correct    = empty_per_step_correct[-1].copy()  # (n_empty,) bool
+            if T_actual > 1 and empty_step_preds.shape[1] > 0:
+                step_empty_change_rate = (np.diff(empty_step_preds, axis=0) != 0).mean(axis=1).astype(np.float32)
+            else:
+                step_empty_change_rate = np.zeros(max(T_actual - 1, 0), dtype=np.float32)
 
             # prediction stability: start from the last step and go backwards, the earliest step that makes the prediction no longer change
             stable_step = T_actual
@@ -519,6 +539,11 @@ class ZTrace:
             self.step_given_acc.append(given_acc)
             self.empty_error_step_count.append(empty_error_step_count)
             self.empty_pred_unique_count.append(empty_pred_unique_count)
+            self.empty_pred_change_count.append(empty_pred_change_count)
+            self.empty_flips_to_correct.append(empty_flips_to_correct)
+            self.empty_flips_to_wrong.append(empty_flips_to_wrong)
+            self.empty_final_correct.append(empty_final_correct)
+            self.step_empty_change_rate.append(step_empty_change_rate)
             self.step_pred_stable.append(stable_step)
             self.step_first_correct.append(first_correct_step)
             self.step_preds_all.append(sample_step_preds.astype(np.int16))

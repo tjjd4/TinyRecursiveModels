@@ -2195,7 +2195,7 @@ def plot_empty_cell_error_unique_relation(
     changing_mask = all_uniques > 1
     total = max(all_errors.size, 1)
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 5))
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(22, 5))
 
     # ── Left: unique-prediction-count distribution ──
     u_bins = np.arange(1, T_actual + 2) - 0.5
@@ -2249,6 +2249,222 @@ def plot_empty_cell_error_unique_relation(
                   fontweight='bold')
     ax2.grid(True, alpha=0.3, axis='y')
     ax2.legend(fontsize=8, frameon=False)
+
+    # ── Right: row-normalized conditional P(unique | error) ──
+    joint, _, _ = np.histogram2d(
+        all_errors, all_uniques,
+        bins=[np.arange(0, T_actual + 2) - 0.5,
+              np.arange(1, T_actual + 2) - 0.5],
+    )
+    row_sums = joint.sum(axis=1, keepdims=True)
+    cond = np.divide(joint, row_sums, out=np.zeros_like(joint),
+                     where=row_sums > 0)  # (T+1, T): P(unique | error)
+
+    im = ax3.imshow(
+        cond.T, origin='lower', aspect='auto',
+        extent=[-0.5, T_actual + 0.5, 0.5, T_actual + 0.5],
+        cmap='viridis', vmin=0, vmax=1,
+    )
+    # annotate cells with ≥1% so the eye reads numbers, not colour gradient
+    for ei in range(T_actual + 1):
+        for ui in range(T_actual):
+            v = cond[ei, ui]
+            if v >= 0.01:
+                txt_color = 'white' if v < 0.5 else 'black'
+                label = f'{v*100:.0f}' if v >= 0.1 else f'{v*100:.1f}'
+                ax3.text(ei, ui + 1, label, ha='center', va='center',
+                         color=txt_color, fontsize=7)
+    # mark error rows that have no cells (no row to normalise)
+    for ei in range(T_actual + 1):
+        if row_sums[ei, 0] == 0:
+            ax3.text(ei, (T_actual + 1) / 2, '∅',
+                     ha='center', va='center', color='gray', fontsize=8)
+
+    ax3.set_xticks([0, 4, 8, 12, T_actual])
+    ax3.set_yticks([1, 4, 8, 12, T_actual])
+    ax3.set_xlabel('Error count')
+    ax3.set_ylabel('Unique prediction count')
+    ax3.set_title('Conditional P(unique | error)  — % within each column',
+                  fontweight='bold')
+    fig.colorbar(im, ax=ax3, label='P(unique | error)')
+
+    fig.tight_layout()
+    return fig
+
+
+def plot_empty_cell_behavior_taxonomy(
+    empty_error_step_count: List[np.ndarray],
+    empty_pred_unique_count: List[np.ndarray],
+    empty_pred_change_count: List[np.ndarray],
+    empty_flips_to_correct: List[np.ndarray],
+    empty_flips_to_wrong: List[np.ndarray],
+    empty_final_correct: List[np.ndarray],
+    correct_flags: List[bool],
+    save_dir: str,
+    T_actual: int = 16,
+) -> Optional[plt.Figure]:
+    correct_idx, incorrect_idx = _split_indices(correct_flags)
+    if not incorrect_idx and not correct_idx:
+        return None
+
+    cls_labels = ['A: never-wrong', 'B: locked-wrong', 'C: oscillated',
+                  'D: improved', 'E: regressed']
+    cls_colors = ['#2ca02c', '#d62728', '#ff7f0e', '#1f77b4', '#9467bd']
+    seg_labels = ['static (no change)', 'wrong→wrong change',
+                  'flips_to_correct', 'flips_to_wrong']
+    seg_colors = ['#cccccc', '#ff9896', '#98df8a', '#aec7e8']
+
+    def _gather(idxs):
+        if not idxs:
+            return None
+        errors  = np.concatenate([empty_error_step_count[i] for i in idxs])
+        uniques = np.concatenate([empty_pred_unique_count[i] for i in idxs])
+        changes = np.concatenate([empty_pred_change_count[i] for i in idxs])
+        ftc     = np.concatenate([empty_flips_to_correct[i] for i in idxs])
+        ftw     = np.concatenate([empty_flips_to_wrong[i] for i in idxs])
+        final_c = np.concatenate([empty_final_correct[i] for i in idxs]).astype(bool)
+        if errors.size == 0:
+            return None
+        return errors, uniques, changes, ftc, ftw, final_c
+
+    def _classify(errors, uniques, final_c):
+        n = errors.size
+        transient = (errors > 0) & (errors < T_actual)
+        cls = np.full(n, -1, dtype=np.int8)
+        cls[errors == 0]                            = 0
+        cls[(errors == T_actual) & (uniques == 1)]  = 1
+        cls[(errors == T_actual) & (uniques > 1)]   = 2
+        cls[transient & final_c]                    = 3
+        cls[transient & ~final_c]                   = 4
+        return cls
+
+    def _draw_taxonomy(ax, cls, n, title, n_puzzles):
+        props = np.array([(cls == k).sum() / n for k in range(5)])
+        left = 0.0
+        for k in range(5):
+            p = props[k]
+            ax.barh(0, p, left=left, color=cls_colors[k],
+                    edgecolor='white', linewidth=0.6,
+                    label=f'{cls_labels[k]} ({p*100:.1f}%)')
+            if p > 0.03:
+                ax.text(left + p/2, 0, f'{p*100:.1f}%',
+                        ha='center', va='center',
+                        color='white', fontsize=10, fontweight='bold')
+            left += p
+        ax.set_xlim(0, 1)
+        ax.set_ylim(-0.5, 0.5)
+        ax.set_yticks([])
+        ax.set_xlabel('Proportion of empty cells')
+        ax.set_title(f'{title} (n_puzzles={n_puzzles}, n_cells={n})',
+                     fontweight='bold')
+        ax.legend(fontsize=8, loc='upper center',
+                  bbox_to_anchor=(0.5, -0.2), ncol=3, frameon=False)
+
+    def _draw_decomposition(ax, cls, changes, ftc, ftw, title):
+        static    = (T_actual - 1) - changes
+        ww_change = changes - ftc - ftw
+        means = np.zeros((5, 4))
+        for k in range(5):
+            mask = (cls == k)
+            if mask.sum() == 0:
+                continue
+            means[k, 0] = static[mask].mean()
+            means[k, 1] = ww_change[mask].mean()
+            means[k, 2] = ftc[mask].mean()
+            means[k, 3] = ftw[mask].mean()
+        ys = np.arange(5)
+        cum = np.zeros(5)
+        for j in range(4):
+            ax.barh(ys, means[:, j], left=cum, color=seg_colors[j],
+                    edgecolor='white', linewidth=0.4, label=seg_labels[j])
+            for k in range(5):
+                v = means[k, j]
+                if v > 0.4:
+                    ax.text(cum[k] + v/2, ys[k], f'{v:.1f}',
+                            ha='center', va='center', fontsize=8, color='black')
+            cum = cum + means[:, j]
+        ax.set_yticks(ys)
+        ax.set_yticklabels(cls_labels)
+        ax.invert_yaxis()
+        ax.set_xlim(0, T_actual - 1)
+        ax.set_xlabel(f'Mean transitions per cell (out of {T_actual - 1})')
+        ax.set_title(title, fontweight='bold')
+        ax.legend(fontsize=8, loc='upper center',
+                  bbox_to_anchor=(0.5, -0.15), ncol=4, frameon=False)
+        ax.grid(True, alpha=0.3, axis='x')
+
+    groups = [
+        ('Incorrect Puzzles', incorrect_idx),
+        ('Correct Puzzles',   correct_idx),
+    ]
+    rows = [(name, idxs, _gather(idxs)) for name, idxs in groups]
+    rows = [r for r in rows if r[2] is not None]
+    if not rows:
+        return None
+
+    fig, axes = plt.subplots(len(rows), 2, figsize=(16, 5 * len(rows)),
+                             gridspec_kw={'width_ratios': [1, 1.2]},
+                             squeeze=False)
+    for r, (name, idxs, data) in enumerate(rows):
+        errors, uniques, changes, ftc, ftw, final_c = data
+        cls = _classify(errors, uniques, final_c)
+        _draw_taxonomy(axes[r, 0], cls, errors.size,
+                       f'Cell Behavior Taxonomy ({name})', len(idxs))
+        _draw_decomposition(axes[r, 1], cls, changes, ftc, ftw,
+                            f'Per-class Transition Decomposition ({name})')
+
+    fig.tight_layout()
+    return fig
+
+
+def plot_empty_cell_step_change_rate(
+    step_empty_change_rate: List[np.ndarray],
+    correct_flags: List[bool],
+    save_dir: str,
+) -> Optional[plt.Figure]:
+    """Mean fraction of empty cells whose prediction changed at each step boundary t→t+1.
+    To pair with z_H CKA: high CKA + high change_rate ⇒ surface-level freezing while
+    cells still flip; high CKA + low change_rate ⇒ genuinely frozen."""
+    if not step_empty_change_rate:
+        return None
+
+    correct_idx, incorrect_idx = _split_indices(correct_flags)
+    max_T1 = max(r.size for r in step_empty_change_rate)
+    if max_T1 == 0:
+        return None
+
+    def _mean_std(idxs):
+        if not idxs:
+            return np.full(max_T1, np.nan), np.full(max_T1, np.nan)
+        arr = np.array([
+            np.pad(step_empty_change_rate[i].astype(np.float32),
+                   (0, max_T1 - step_empty_change_rate[i].size),
+                   constant_values=np.nan)
+            for i in idxs
+        ])
+        return np.nanmean(arr, axis=0), np.nanstd(arr, axis=0)
+
+    mean_c, std_c = _mean_std(correct_idx)
+    mean_w, std_w = _mean_std(incorrect_idx)
+
+    xs = np.arange(1, max_T1 + 1)  # boundary index: step t → step t+1, x = t
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    if not np.all(np.isnan(mean_c)):
+        ax.plot(xs, mean_c, color='#2ca02c', marker='o', label=f'correct (n={len(correct_idx)})')
+        ax.fill_between(xs, mean_c - std_c, mean_c + std_c, color='#2ca02c', alpha=0.15)
+    if not np.all(np.isnan(mean_w)):
+        ax.plot(xs, mean_w, color='#d62728', marker='o', label=f'incorrect (n={len(incorrect_idx)})')
+        ax.fill_between(xs, mean_w - std_w, mean_w + std_w, color='#d62728', alpha=0.15)
+
+    ax.set_xlabel('Step boundary  t → t+1')
+    ax.set_ylabel('Fraction of empty cells with prediction change')
+    ax.set_ylim(0, None)
+    ax.set_xticks(xs)
+    ax.set_title('Empty Cell Step Change Rate (compare with z_H CKA diagonal)',
+                 fontweight='bold')
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=9, frameon=False)
 
     fig.tight_layout()
     return fig
