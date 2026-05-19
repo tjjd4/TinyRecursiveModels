@@ -60,6 +60,21 @@ load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t
 +run_name=${run_name}
 ```
 
+#### Same Input
+
+```bash
+run_name="z_analysis_pretrain_mlp_t_sudoku_same_input_44"
+python z_analysis.py \
+arch=trm_same_input_trace \
+data_paths="[data/sudoku-extreme-1k-aug-1000]" \
+evaluators="[]" \
+arch.mlp_t=True arch.pos_encodings=none \
+arch.L_layers=2 \
+arch.H_cycles=3 arch.L_cycles=6 \
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_same_input_ga_44/step_45570" \
++run_name=${run_name}
+```
+
 #### Random Weight
 
 ```bash
@@ -91,6 +106,22 @@ arch.reset_z_L_per_H_cycle=True \
 arch.reset_z_H_per_step=False \
 arch.reset_z_H_per_H_cycle=False \
 +run_name=${run_name}
+
+run_name="z_analysis_pretrain_mlp_t_sudoku_reset_zL_per_step_checkpoint_44"
+python z_analysis.py \
+arch=trm_reset_trace \
+data_paths="[data/sudoku-extreme-1k-aug-1000]" \
+evaluators="[]" \
+arch.mlp_t=True arch.pos_encodings=none \
+arch.L_layers=2 \
+arch.H_cycles=3 arch.L_cycles=6 \
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_reset_zL_per_step_ga_44/step_65100" \
+arch.reset_z_L_per_step=True \
+arch.reset_z_L_per_H_cycle=False \
+arch.reset_z_H_per_step=False \
+arch.reset_z_H_per_H_cycle=False \
++run_name=${run_name}
+
 
 run_name="z_analysis_pretrain_mlp_t_sudoku_reset_zH_per_H_cycle_44"
 python z_analysis.py \
@@ -200,6 +231,20 @@ load_checkpoint="checkpoints/Sudoku/hrm-hf/checkpoint" \
 +run_name=${run_name}
 ```
 
+### Maze-Hard:
+
+```bash
+run_name="z_analysis_pretrain_att_maze30x30_1gpu_44"
+python z_analysis.py \
+arch=trm_trace \
+data_paths="[data/maze-30x30-hard-1k]" \
+evaluators="[]" \
+arch.L_layers=2 \
+arch.H_cycles=3 arch.L_cycles=4 \
+load_checkpoint="checkpoints/Maze-30x30-hard-1k-ACT-torch/pretrain_att_maze30x30_1gpu_44/step_65100" \
++run_name=${run_name}
+```
+
 ## Scripts
 
 ### Split Dataset correct and incorrect
@@ -306,21 +351,6 @@ data_paths="[data/sudoku-extreme-1k-aug-1000]" \
 evaluators="[]" \
 epochs=50000 eval_interval=5000 \
 lr=1e-4 puzzle_emb_lr=1e-4 weight_decay=1.0 puzzle_emb_weight_decay=1.0 \
-arch.L_layers=2 \
-arch.H_cycles=3 arch.L_cycles=6 \
-+run_name=${run_name} ema=True
-```
-
-#### Learn z0
-```bash
-run_name="pretrain_mlp_t_sudoku_learn_z0"
-python pretrain.py \
-arch=trm_learn_z0 \
-data_paths="[data/sudoku-extreme-1k-aug-1000]" \
-evaluators="[]" \
-epochs=50000 eval_interval=5000 \
-lr=1e-4 puzzle_emb_lr=1e-4 weight_decay=1.0 puzzle_emb_weight_decay=1.0 \
-arch.mlp_t=True arch.pos_encodings=none \
 arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=6 \
 +run_name=${run_name} ema=True
