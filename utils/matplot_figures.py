@@ -982,6 +982,8 @@ def plot_disagreement(
     return fig
 
 def plot_cosine_similarity(empty_cos_sim, given_cos_sim, correct_flags: List[bool], save_dir: str):
+    COSINE_MIN, COSINE_MAX = -1.0, 1.0
+
     def _padded_stats(indices, data_list, max_T):
         if not indices:
             return np.full(max_T, np.nan), np.full(max_T, np.nan)
@@ -1011,16 +1013,19 @@ def plot_cosine_similarity(empty_cos_sim, given_cos_sim, correct_flags: List[boo
  
     for idx, data, color, fmt, label in lines:
         mean, std = _padded_stats(idx, data, max_T)
+        mean = np.clip(mean, COSINE_MIN, COSINE_MAX)
+        band_low = np.clip(mean - std, COSINE_MIN, COSINE_MAX)
+        band_high = np.clip(mean + std, COSINE_MIN, COSINE_MAX)
         is_given = '--' in fmt
         alpha_fill = 0.08 if is_given else 0.15
         ax.plot(steps, mean, fmt, color=color, ms=4,
                 alpha=0.5 if is_given else 1.0, label=label)
-        ax.fill_between(steps, mean - std, mean + std,
-                        color=color, alpha=alpha_fill)
+        ax.fill_between(steps, band_low, band_high, color=color, alpha=alpha_fill)
  
     ax.set_xlabel('Supervision Step')
     ax.set_ylabel('Cosine Similarity (z_H, z_L)')
     ax.set_xticks(steps)
+    ax.set_ylim(0.4, COSINE_MAX)
     ax.set_title('Per-step Cosine Similarity between z_H and z_L')
     ax.legend()
     ax.grid(True, alpha=0.3)
