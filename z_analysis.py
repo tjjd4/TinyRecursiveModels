@@ -192,7 +192,7 @@ def init_train_state(config: TraceConfig, metadata: PuzzleDatasetMetadata, rank:
     # print("H_init:", model.model.inner.H_init)
     # print("L_init:", model.model.inner.L_init)
 
-    # data = np.load("checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_44/z_analysis_step_0/z_raw.npz", allow_pickle=True)
+    # data = np.load("checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku/z_analysis_step_0/z_raw.npz", allow_pickle=True)
     # trajs  = list(data["trajectories"])   # list of (T, D) — T steps, D hidden
     # z_L_trajs = list(data["z_L_trajectories"])  # list of (T, D) — T steps, D hidden
     # flags  = list(data["correct_flags"])  # bool

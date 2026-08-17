@@ -85,6 +85,8 @@ class ZTrace:
         self.correct_flags = []
         self.ratings = []
         self.given_masks = []
+        # GT labels per stored sample, (81,) int8, -100 = ignored
+        self.labels = []
         self.residuals = []
         self.z_L_residuals = []
         self.pos_residuals = []
@@ -525,6 +527,7 @@ class ZTrace:
             self.correct_flags.append(is_correct)
             self.ratings.append(rating)
             self.given_masks.append(given)
+            self.labels.append(cell_labels.astype(np.int8))
             self.residuals.append(diffs)
             self.z_L_residuals.append(z_L_diffs)
             self.pos_residuals.append(pos_diffs)
@@ -592,6 +595,7 @@ class ZTrace:
             "correct_flags": len(self.correct_flags),
             "ratings": len(self.ratings),
             "given_masks": len(self.given_masks),
+            "labels": len(self.labels),
             "residuals": len(self.residuals),
             "z_L_residuals": len(self.z_L_residuals),
             "pos_residuals": len(self.pos_residuals),

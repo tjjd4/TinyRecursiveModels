@@ -13,19 +13,19 @@ evaluators="[]" \
 arch.mlp_t=True arch.pos_encodings=none \
 arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=6 \
-load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_44/step_65100" \
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga/step_65100" \
 +run_name=${run_name}
 ```
 
 ```bash
-run_name="eval_pretrain_mlp_t_sudoku_incorrect_44"
+run_name="eval_pretrain_mlp_t_sudoku_incorrect"
 python eval.py \
 arch=trm \
 data_paths="[data/split/sudoku-extreme-1k-aug-1000/incorrect]" \
 evaluators="[]" \
 arch.mlp_t=True arch.pos_encodings=none \
 arch.L_layers=2 arch.H_cycles=3 arch.L_cycles=6 \
-load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_44/step_65100" \
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga/step_65100" \
 +run_name=${run_name}
 ```
 
@@ -39,7 +39,7 @@ data_paths="[data/maze-30x30-hard-1k]" \
 evaluators="[]" \
 arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=4 \
-load_checkpoint="checkpoints/Maze-30x30-hard-1k-ACT-torch/pretrain_att_maze30x30_1gpu_44/step_65100" \
+load_checkpoint="checkpoints/Maze-30x30-hard-1k-ACT-torch/pretrain_att_maze30x30_1gpu/step_65100" \
 +run_name=${run_name}
 ```
 
@@ -48,7 +48,7 @@ load_checkpoint="checkpoints/Maze-30x30-hard-1k-ACT-torch/pretrain_att_maze30x30
 ### Sudoku-Extreme:
 
 ```bash
-run_name="z_analysis_pretrain_mlp_t_sudoku_44"
+run_name="z_analysis_pretrain_mlp_t_sudoku"
 python z_analysis.py \
 arch=trm_trace \
 data_paths="[data/sudoku-extreme-1k-aug-1000]" \
@@ -56,14 +56,14 @@ evaluators="[]" \
 arch.mlp_t=True arch.pos_encodings=none \
 arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=6 \
-load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_44/step_65100" \
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga/step_65100" \
 +run_name=${run_name}
 ```
 
 #### Same Input
 
 ```bash
-run_name="z_analysis_pretrain_mlp_t_sudoku_same_input_44"
+run_name="z_analysis_pretrain_mlp_t_sudoku_same_input"
 python z_analysis.py \
 arch=trm_same_input_trace \
 data_paths="[data/sudoku-extreme-1k-aug-1000]" \
@@ -71,14 +71,14 @@ evaluators="[]" \
 arch.mlp_t=True arch.pos_encodings=none \
 arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=6 \
-load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_same_input_ga_44/step_45570" \
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_same_input_ga/step_45570" \
 +run_name=${run_name}
 ```
 
 #### Random Weight
 
 ```bash
-run_name="z_analysis_random_weight_mlp_t_sudoku_44"
+run_name="z_analysis_random_weight_mlp_t_sudoku"
 python z_analysis.py \
 arch=trm_random_trace \
 data_paths="[data/sudoku-extreme-1k-aug-1000]" \
@@ -92,7 +92,7 @@ arch.H_cycles=3 arch.L_cycles=6 \
 #### Reset z_L per H cycle
 
 ```bash
-run_name="z_analysis_pretrain_mlp_t_sudoku_reset_zL_per_H_cycle_44"
+run_name="z_analysis_pretrain_mlp_t_sudoku_reset_zL_per_H_cycle"
 python z_analysis.py \
 arch=trm_reset_trace \
 data_paths="[data/sudoku-extreme-1k-aug-1000]" \
@@ -100,14 +100,14 @@ evaluators="[]" \
 arch.mlp_t=True arch.pos_encodings=none \
 arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=6 \
-load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_44/step_65100" \
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga/step_65100" \
 arch.reset_z_L_per_step=False \
 arch.reset_z_L_per_H_cycle=True \
 arch.reset_z_H_per_step=False \
 arch.reset_z_H_per_H_cycle=False \
 +run_name=${run_name}
 
-run_name="z_analysis_pretrain_mlp_t_sudoku_reset_zL_per_step_checkpoint_44"
+run_name="z_analysis_pretrain_mlp_t_sudoku_reset_zL_per_step_checkpoint"
 python z_analysis.py \
 arch=trm_reset_trace \
 data_paths="[data/sudoku-extreme-1k-aug-1000]" \
@@ -115,7 +115,7 @@ evaluators="[]" \
 arch.mlp_t=True arch.pos_encodings=none \
 arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=6 \
-load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_reset_zL_per_step_ga_44/step_65100" \
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_reset_zL_per_step_ga/step_65100" \
 arch.reset_z_L_per_step=True \
 arch.reset_z_L_per_H_cycle=False \
 arch.reset_z_H_per_step=False \
@@ -123,7 +123,7 @@ arch.reset_z_H_per_H_cycle=False \
 +run_name=${run_name}
 
 
-run_name="z_analysis_pretrain_mlp_t_sudoku_reset_zH_per_H_cycle_44"
+run_name="z_analysis_pretrain_mlp_t_sudoku_reset_zH_per_H_cycle"
 python z_analysis.py \
 arch=trm_reset_trace \
 data_paths="[data/sudoku-extreme-1k-aug-1000]" \
@@ -131,7 +131,7 @@ evaluators="[]" \
 arch.mlp_t=True arch.pos_encodings=none \
 arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=6 \
-load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_44/step_65100" \
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga/step_65100" \
 arch.reset_z_L_per_step=False \
 arch.reset_z_L_per_H_cycle=False \
 arch.reset_z_H_per_step=False \
@@ -142,7 +142,7 @@ arch.reset_z_H_per_H_cycle=True \
 #### Reset z_L or z_H at specific steps
 
 ```bash
-run_name="z_analysis_pretrain_mlp_t_sudoku_reset_zL_at_step_6_44"
+run_name="z_analysis_pretrain_mlp_t_sudoku_reset_zL_at_step_6"
 python z_analysis.py \
 arch=trm_reset_trace \
 data_paths="[data/sudoku-extreme-1k-aug-1000]" \
@@ -150,7 +150,7 @@ evaluators="[]" \
 arch.mlp_t=True arch.pos_encodings=none \
 arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=6 \
-load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_44/step_65100" \
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga/step_65100" \
 arch.reset_z_L_per_step=False \
 arch.reset_z_L_per_H_cycle=False \
 arch.reset_z_H_per_step=False \
@@ -159,7 +159,7 @@ arch.reset_z_L_at_steps="[5]" \
 arch.reset_z_H_at_steps="[]" \
 +run_name=${run_name}
 
-run_name="z_analysis_pretrain_mlp_t_sudoku_reset_zH_at_step_6_44"
+run_name="z_analysis_pretrain_mlp_t_sudoku_reset_zH_at_step_6"
 python z_analysis.py \
 arch=trm_reset_trace \
 data_paths="[data/sudoku-extreme-1k-aug-1000]" \
@@ -167,7 +167,7 @@ evaluators="[]" \
 arch.mlp_t=True arch.pos_encodings=none \
 arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=6 \
-load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_44/step_65100" \
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga/step_65100" \
 arch.reset_z_L_per_step=False \
 arch.reset_z_L_per_H_cycle=False \
 arch.reset_z_H_per_step=False \
@@ -188,7 +188,7 @@ evaluators="[]" \
 arch.mlp_t=True arch.pos_encodings=none \
 arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=6 \
-load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_44/step_65100" \
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga/step_65100" \
 +run_name=${run_name}
 
 
@@ -200,7 +200,7 @@ evaluators="[]" \
 arch.mlp_t=True arch.pos_encodings=none \
 arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=6 \
-load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_44/step_65100" \
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga/step_65100" \
 +run_name=${run_name}
 ```
 
@@ -234,14 +234,14 @@ load_checkpoint="checkpoints/Sudoku/hrm-hf/checkpoint" \
 ### Maze-Hard:
 
 ```bash
-run_name="z_analysis_pretrain_att_maze30x30_1gpu_44"
+run_name="z_analysis_pretrain_att_maze30x30_1gpu"
 python z_analysis.py \
 arch=trm_trace \
 data_paths="[data/maze-30x30-hard-1k]" \
 evaluators="[]" \
 arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=4 \
-load_checkpoint="checkpoints/Maze-30x30-hard-1k-ACT-torch/pretrain_att_maze30x30_1gpu_44/step_65100" \
+load_checkpoint="checkpoints/Maze-30x30-hard-1k-ACT-torch/pretrain_att_maze30x30_1gpu/step_65100" \
 +run_name=${run_name}
 ```
 
@@ -258,7 +258,7 @@ data_paths="[data/sudoku-extreme-1k-aug-1000]" \
 arch.mlp_t=True arch.pos_encodings=none \
 arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=6 \
-load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_44/step_65100"
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga/step_65100"
 ```
 
 ##### With Rating
@@ -270,7 +270,7 @@ data_paths="[data/sudoku-extreme-1k-aug-1000]" \
 arch.mlp_t=True arch.pos_encodings=none \
 arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=6 \
-load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_44/step_65100"
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga/step_65100"
 ```
 
 ### Consistency Check
@@ -284,7 +284,7 @@ data_paths="[data/sudoku-extreme-1k-aug-1000]" \
 arch.mlp_t=True arch.pos_encodings=none \
 arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=6 \
-load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_44/step_65100"
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga/step_65100"
 +num_runs=5
 ```
 
@@ -292,34 +292,34 @@ load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t
 
 ```bash
 python scripts/compute_degradation_rate.py \
---baseline   checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_44/z_analysis_step_0/z_raw.npz \
---ablation_A checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_per_H_cycle_44/z_analysis_step_0/z_raw.npz \
---ablation_B checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_per_step_44/z_analysis_step_0/z_raw.npz
+--baseline   checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku/z_analysis_step_0/z_raw.npz \
+--ablation_A checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_per_H_cycle/z_analysis_step_0/z_raw.npz \
+--ablation_B checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_per_step/z_analysis_step_0/z_raw.npz
 
 python scripts/compute_degradation_rate.py \
---baseline   checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_44/z_analysis_step_0/z_raw.npz \
---ablation_A checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_same_input_44/z_analysis_step_0/z_raw.npz
+--baseline   checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku/z_analysis_step_0/z_raw.npz \
+--ablation_A checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_same_input/z_analysis_step_0/z_raw.npz
 ```
 
 ### Reset Analysis
 
 ```bash
 python scripts/reset_analysis.py \
---baseline  checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_44/z_analysis_step_0/z_raw.npz \
---zH_k2     checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zH_at_step_2_44/z_analysis_step_0/z_raw.npz \
---zH_k4     checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zH_at_step_4_44/z_analysis_step_0/z_raw.npz \
---zH_k6     checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zH_at_step_6_44/z_analysis_step_0/z_raw.npz \
---zH_k8     checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zH_at_step_8_44/z_analysis_step_0/z_raw.npz \
---zH_k10    checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zH_at_step_10_44/z_analysis_step_0/z_raw.npz \
---zH_k12    checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zH_at_step_12_44/z_analysis_step_0/z_raw.npz \
---zH_k14    checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zH_at_step_14_44/z_analysis_step_0/z_raw.npz \
---zL_k2     checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_at_step_2_44/z_analysis_step_0/z_raw.npz \
---zL_k4     checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_at_step_4_44/z_analysis_step_0/z_raw.npz \
---zL_k6     checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_at_step_6_44/z_analysis_step_0/z_raw.npz \
---zL_k8     checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_at_step_8_44/z_analysis_step_0/z_raw.npz \
---zL_k10    checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_at_step_10_44/z_analysis_step_0/z_raw.npz \
---zL_k12    checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_at_step_12_44/z_analysis_step_0/z_raw.npz \
---zL_k14    checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_at_step_14_44/z_analysis_step_0/z_raw.npz \
+--baseline  checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku/z_analysis_step_0/z_raw.npz \
+--zH_k2     checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zH_at_step_2/z_analysis_step_0/z_raw.npz \
+--zH_k4     checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zH_at_step_4/z_analysis_step_0/z_raw.npz \
+--zH_k6     checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zH_at_step_6/z_analysis_step_0/z_raw.npz \
+--zH_k8     checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zH_at_step_8/z_analysis_step_0/z_raw.npz \
+--zH_k10    checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zH_at_step_10/z_analysis_step_0/z_raw.npz \
+--zH_k12    checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zH_at_step_12/z_analysis_step_0/z_raw.npz \
+--zH_k14    checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zH_at_step_14/z_analysis_step_0/z_raw.npz \
+--zL_k2     checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_at_step_2/z_analysis_step_0/z_raw.npz \
+--zL_k4     checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_at_step_4/z_analysis_step_0/z_raw.npz \
+--zL_k6     checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_at_step_6/z_analysis_step_0/z_raw.npz \
+--zL_k8     checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_at_step_8/z_analysis_step_0/z_raw.npz \
+--zL_k10    checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_at_step_10/z_analysis_step_0/z_raw.npz \
+--zL_k12    checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_at_step_12/z_analysis_step_0/z_raw.npz \
+--zL_k14    checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/z_analysis_pretrain_mlp_t_sudoku_reset_zL_at_step_14/z_analysis_step_0/z_raw.npz \
 --save_dir  checkpoints/Sudoku-extreme-1k-aug-1000-trace-torch/degradation_curve
 ```
 
@@ -388,7 +388,7 @@ lr=1e-6 puzzle_emb_lr=1e-6 weight_decay=1.0 puzzle_emb_weight_decay=1.0 \
 arch.mlp_t=True arch.pos_encodings=none \
 arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=6 \
-load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga_78/step_65104" \
+load_checkpoint="checkpoints/Sudoku-extreme-1k-aug-1000-ACT-torch/pretrain_mlp_t_sudoku_ga/step_65104" \
 +run_name=${run_name} ema=True
 ```
 
@@ -404,6 +404,6 @@ epochs=500 eval_interval=50 \
 lr=1e-6 puzzle_emb_lr=1e-6 weight_decay=1.0 puzzle_emb_weight_decay=1.0 \
 arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=4 \
-load_checkpoint="checkpoints/Maze-30x30-hard-1k-ACT-torch/pretrain_att_maze30x30_1gpu_44/step_65104" \
+load_checkpoint="checkpoints/Maze-30x30-hard-1k-ACT-torch/pretrain_att_maze30x30_1gpu/step_65104" \
 +run_name=${run_name} ema=True
 ```
